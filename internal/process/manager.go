@@ -1,0 +1,231 @@
+package process
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"os/exec"
+	"sync"
+	"syscall"
+	"time"
+
+	"cf-worker-manager/internal/worker"
+)
+
+type Manager struct {
+	processes map[string]*Process
+	mu        sync.RWMutex
+}
+
+type Process struct {
+	Worker    *worker.Worker
+	Cmd       *exec.Cmd
+	Cancel    context.CancelFunc
+	LogBuffer *CircularBuffer
+	Started   time.Time
+	mu        sync.RWMutex
+}
+
+type CircularBuffer struct {
+	lines    []string
+	capacity int
+	index    int
+	full     bool
+	mu       sync.RWMutex
+}
+
+func NewManager() *Manager {
+	return &Manager{
+		processes: make(map[string]*Process),
+	}
+}
+
+func NewCircularBuffer(capacity int) *CircularBuffer {
+	return &CircularBuffer{
+		lines:    make([]string, capacity),
+		capacity: capacity,
+	}
+}
+
+func (cb *CircularBuffer) Write(line string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.lines[cb.index] = line
+	cb.index = (cb.index + 1) % cb.capacity
+	if cb.index == 0 {
+		cb.full = true
+	}
+}
+
+func (cb *CircularBuffer) GetLines() []string {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+
+	if !cb.full {
+		return cb.lines[:cb.index]
+	}
+
+	result := make([]string, cb.capacity)
+	copy(result, cb.lines[cb.index:])
+	copy(result[cb.capacity-cb.index:], cb.lines[:cb.index])
+	return result
+}
+
+func (m *Manager) StartWorker(w *worker.Worker, script string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.processes[w.Name]; exists {
+		return fmt.Errorf("worker %s is already running", w.Name)
+	}
+
+	_, exists := w.Scripts[script]
+	if !exists {
+		return fmt.Errorf("script %s not found for worker %s", script, w.Name)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cmd := exec.CommandContext(ctx, "bun", "run", script)
+	cmd.Dir = w.Path
+	// Set process group to handle signals properly
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+		Pgid:    0,
+	}
+
+	logBuffer := NewCircularBuffer(1000)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	process := &Process{
+		Worker:    w,
+		Cmd:       cmd,
+		Cancel:    cancel,
+		LogBuffer: logBuffer,
+		Started:   time.Now(),
+	}
+
+	m.processes[w.Name] = process
+
+	if err := cmd.Start(); err != nil {
+		delete(m.processes, w.Name)
+		cancel()
+		return fmt.Errorf("failed to start worker: %w", err)
+	}
+
+	go m.readLogs(stdout, logBuffer, "STDOUT")
+	go m.readLogs(stderr, logBuffer, "STDERR")
+
+	go func() {
+		cmd.Wait()
+		m.mu.Lock()
+		if proc, exists := m.processes[w.Name]; exists {
+			proc.Worker.Status = worker.StatusStopped
+		}
+		m.mu.Unlock()
+	}()
+
+	w.Status = worker.StatusRunning
+	return nil
+}
+
+func (m *Manager) StopWorker(workerName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	process, exists := m.processes[workerName]
+	if !exists {
+		return fmt.Errorf("worker %s is not running", workerName)
+	}
+
+	// Kill the entire process group to prevent orphaned processes
+	if process.Cmd.Process != nil {
+		pgid, err := syscall.Getpgid(process.Cmd.Process.Pid)
+		if err == nil {
+			// Kill the entire process group
+			syscall.Kill(-pgid, syscall.SIGTERM)
+			// Give processes time to gracefully shut down
+			time.Sleep(100 * time.Millisecond)
+			// Force kill if still running
+			syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+	}
+
+	process.Cancel()
+	delete(m.processes, workerName)
+	process.Worker.Status = worker.StatusStopped
+
+	return nil
+}
+
+func (m *Manager) GetProcess(workerName string) (*Process, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	process, exists := m.processes[workerName]
+	return process, exists
+}
+
+func (m *Manager) GetRunningProcesses() map[string]*Process {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[string]*Process)
+	for name, process := range m.processes {
+		result[name] = process
+	}
+	return result
+}
+
+func (m *Manager) StopAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for name, process := range m.processes {
+		// Kill the entire process group to prevent orphaned processes
+		if process.Cmd.Process != nil {
+			pgid, err := syscall.Getpgid(process.Cmd.Process.Pid)
+			if err == nil {
+				// Kill the entire process group
+				syscall.Kill(-pgid, syscall.SIGTERM)
+			}
+		}
+		process.Cancel()
+		process.Worker.Status = worker.StatusStopped
+		delete(m.processes, name)
+	}
+
+	// Give processes time to gracefully shut down
+	time.Sleep(200 * time.Millisecond)
+
+	// Force kill any remaining processes
+	for _, process := range m.processes {
+		if process.Cmd.Process != nil {
+			pgid, err := syscall.Getpgid(process.Cmd.Process.Pid)
+			if err == nil {
+				syscall.Kill(-pgid, syscall.SIGKILL)
+			}
+		}
+	}
+}
+
+func (m *Manager) readLogs(reader io.Reader, buffer *CircularBuffer, prefix string) {
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		line := fmt.Sprintf("[%s] %s: %s", time.Now().Format("15:04:05"), prefix, scanner.Text())
+		buffer.Write(line)
+	}
+}
