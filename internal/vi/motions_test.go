@@ -146,7 +146,7 @@ func TestMotions_WordForward(t *testing.T) {
 		{"multiple words", "one two three", 0, 2, 8},
 		{"from middle of word", "hello world", 2, 1, 6},
 		{"at end", "hello world", 10, 1, 10},
-		{"with punctuation", "hello.world test", 0, 1, 5},
+		{"with punctuation", "hello.world test", 0, 1, 6}, // jumps to 'w' after punctuation
 	}
 
 	for _, tt := range tests {

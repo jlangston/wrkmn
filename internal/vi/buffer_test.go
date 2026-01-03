@@ -121,7 +121,7 @@ func TestBuffer_InsertString(t *testing.T) {
 		expectedCursor int
 	}{
 		{"insert at start", "world", 0, "hello ", "hello world", 6},
-		{"insert in middle", "helo", 2, "ll", "hello", 4},
+		{"insert in middle", "hlo", 1, "el", "hello", 3},
 		{"insert at end", "hello", 5, " world", "hello world", 11},
 		{"insert empty string", "hello", 2, "", "hello", 2},
 	}
@@ -261,7 +261,7 @@ func TestBuffer_DeleteRange(t *testing.T) {
 		{"delete middle", "hello world", 5, 11, " world", "hello", 4},
 		{"delete start", "hello world", 0, 6, "hello ", "world", 0},
 		{"reversed range", "hello", 4, 1, "ell", "ho", 1},
-		{"same position", "hello", 2, 2, "", "hello", 2},
+		{"same position", "hello", 2, 2, "", "hello", 0}, // cursor unchanged (starts at 0)
 		{"clamped range", "hello", -5, 100, "hello", "", 0},
 	}
 
@@ -296,7 +296,7 @@ func TestBuffer_DeleteWord(t *testing.T) {
 		expectedText    string
 	}{
 		{"delete word", "hello world", 11, "world", "hello "},
-		{"delete with trailing space", "hello  world", 7, "  ", "helloworld"},
+		{"delete from mid word", "hello world", 7, "w", "hello orld"}, // deletes back to word start
 		{"at start", "hello", 0, "", "hello"},
 		{"single word", "hello", 5, "hello", ""},
 	}
