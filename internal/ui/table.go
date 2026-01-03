@@ -9,8 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"cf-worker-manager/internal/process"
-	"cf-worker-manager/internal/worker"
+	"wrkmn/internal/process"
+	"wrkmn/internal/worker"
 )
 
 type TableModel struct {
@@ -61,7 +61,7 @@ func NewTableModel(workers []*worker.Worker) TableModel {
 	return TableModel{
 		workers:     workers,
 		manager:     process.NewManager(),
-		currentView: WorkerListView,
+		currentView: ViewDashboard,
 		logView:     NewLogView(),
 	}
 }
@@ -79,7 +79,7 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.logView.SetSize(msg.Width, msg.Height)
 		// Force a redraw after resize
-		if m.currentView == LogsView {
+		if m.currentView == ViewLogs {
 			return m, m.logView.TickCmd()
 		}
 
@@ -87,13 +87,13 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.tickCmd()
 
 	case tea.KeyMsg:
-		if m.currentView == LogsView {
+		if m.currentView == ViewLogs {
 			return m.handleLogsViewKeys(msg)
 		}
 		return m.handleTableKeys(msg)
 	}
 
-	if m.currentView == LogsView {
+	if m.currentView == ViewLogs {
 		var cmd tea.Cmd
 		m.logView, cmd = m.logView.Update(msg)
 		return m, cmd
@@ -147,7 +147,7 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m TableModel) handleLogsViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, key.NewBinding(key.WithKeys("q", "esc"))):
-		m.currentView = WorkerListView
+		m.currentView = ViewDashboard
 		return m, nil
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))):
@@ -204,7 +204,7 @@ func (m TableModel) showLogs() (TableModel, tea.Cmd) {
 		w := m.workers[m.cursor]
 		if process, exists := m.manager.GetProcess(w.Name); exists {
 			m.logView.SetProcess(process)
-			m.currentView = LogsView
+			m.currentView = ViewLogs
 			return m, m.logView.TickCmd()
 		}
 	}
@@ -212,7 +212,7 @@ func (m TableModel) showLogs() (TableModel, tea.Cmd) {
 }
 
 func (m TableModel) View() string {
-	if m.currentView == LogsView {
+	if m.currentView == ViewLogs {
 		return m.logView.View()
 	}
 

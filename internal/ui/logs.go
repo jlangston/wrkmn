@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"cf-worker-manager/internal/process"
+	"wrkmn/internal/process"
 )
 
 type LogView struct {

@@ -10,7 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"cf-worker-manager/internal/worker"
+	"wrkmn/internal/config"
+	"wrkmn/internal/worker"
 )
 
 type Manager struct {
@@ -19,12 +20,67 @@ type Manager struct {
 }
 
 type Process struct {
-	Worker    *worker.Worker
+	Name      string         // Process name (from config or worker name)
+	Worker    *worker.Worker // nil for non-worker processes
+	Config    *config.Process // nil for legacy worker-only processes
 	Cmd       *exec.Cmd
 	Cancel    context.CancelFunc
 	LogBuffer *CircularBuffer
 	Started   time.Time
 	mu        sync.RWMutex
+}
+
+// Pid returns the process ID
+func (p *Process) Pid() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.Cmd != nil && p.Cmd.Process != nil {
+		return p.Cmd.Process.Pid
+	}
+	return 0
+}
+
+// StartTime returns when the process was started
+func (p *Process) StartTime() time.Time {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.Started
+}
+
+// Stop stops the process
+func (p *Process) Stop() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.Cmd == nil || p.Cmd.Process == nil {
+		return nil
+	}
+
+	// Kill the entire process group to prevent orphaned processes
+	pgid, err := syscall.Getpgid(p.Cmd.Process.Pid)
+	if err == nil {
+		syscall.Kill(-pgid, syscall.SIGTERM)
+		time.Sleep(100 * time.Millisecond)
+		syscall.Kill(-pgid, syscall.SIGKILL)
+	}
+
+	if p.Cancel != nil {
+		p.Cancel()
+	}
+
+	return nil
+}
+
+// IsRunning returns true if the process is still running
+func (p *Process) IsRunning() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.Cmd == nil || p.Cmd.Process == nil {
+		return false
+	}
+	// Check if process exists
+	err := p.Cmd.Process.Signal(syscall.Signal(0))
+	return err == nil
 }
 
 type CircularBuffer struct {
@@ -228,4 +284,116 @@ func (m *Manager) readLogs(reader io.Reader, buffer *CircularBuffer, prefix stri
 		line := fmt.Sprintf("[%s] %s: %s", time.Now().Format("15:04:05"), prefix, scanner.Text())
 		buffer.Write(line)
 	}
+}
+
+// StartProcess starts a generic process from config
+func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Process) (*Process, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.processes[name]; exists {
+		return nil, fmt.Errorf("process %s is already running", name)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+
+	// Build command with args
+	var cmd *exec.Cmd
+	if len(cfg.Args) > 0 {
+		cmd = exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+	} else {
+		cmd = exec.CommandContext(ctx, cfg.Command)
+	}
+
+	// Set working directory
+	if cfg.WorkingDir != "" {
+		cmd.Dir = cfg.WorkingDir
+	}
+
+	// Set environment variables
+	if len(cfg.Environment) > 0 {
+		cmd.Env = make([]string, 0, len(cfg.Environment))
+		for k, v := range cfg.Environment {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+		}
+	}
+
+	// Set process group to handle signals properly
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+		Pgid:    0,
+	}
+
+	logBuffer := NewCircularBuffer(1000)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	process := &Process{
+		Name:      name,
+		Config:    cfg,
+		Cmd:       cmd,
+		Cancel:    cancel,
+		LogBuffer: logBuffer,
+		Started:   time.Now(),
+	}
+
+	m.processes[name] = process
+
+	if err := cmd.Start(); err != nil {
+		delete(m.processes, name)
+		cancel()
+		return nil, fmt.Errorf("failed to start process: %w", err)
+	}
+
+	go m.readLogs(stdout, logBuffer, "STDOUT")
+	go m.readLogs(stderr, logBuffer, "STDERR")
+
+	go func() {
+		cmd.Wait()
+		m.mu.Lock()
+		// Mark process as stopped when it exits
+		m.mu.Unlock()
+	}()
+
+	return process, nil
+}
+
+// StopProcess stops a process by name
+func (m *Manager) StopProcess(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	process, exists := m.processes[name]
+	if !exists {
+		return fmt.Errorf("process %s is not running", name)
+	}
+
+	if err := process.Stop(); err != nil {
+		return err
+	}
+
+	delete(m.processes, name)
+	return nil
+}
+
+// GetAllProcesses returns all managed processes
+func (m *Manager) GetAllProcesses() map[string]*Process {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[string]*Process)
+	for name, process := range m.processes {
+		result[name] = process
+	}
+	return result
 }

@@ -1,14 +1,13 @@
 package ui
 
 import (
-	"cf-worker-manager/internal/worker"
+	"wrkmn/internal/worker"
 )
 
-type ViewMode int
-
+// Legacy view mode constants for backwards compatibility
 const (
-	WorkerListView ViewMode = iota
-	LogsView
+	WorkerListView = ViewDashboard
+	LogsView       = ViewLogs
 )
 
 func NewModel(workers []*worker.Worker) TableModel {
