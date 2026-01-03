@@ -222,7 +222,9 @@ func (m *Manager) StopWorker(workerName string) error {
 
 	process.Cancel()
 	delete(m.processes, workerName)
-	process.Worker.Status = worker.StatusStopped
+	if process.Worker != nil {
+		process.Worker.Status = worker.StatusStopped
+	}
 
 	return nil
 }
@@ -260,7 +262,9 @@ func (m *Manager) StopAll() {
 			}
 		}
 		process.Cancel()
-		process.Worker.Status = worker.StatusStopped
+		if process.Worker != nil {
+			process.Worker.Status = worker.StatusStopped
+		}
 		delete(m.processes, name)
 	}
 

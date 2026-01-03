@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"wrkmn/internal/config"
 	"wrkmn/internal/worker"
 )
 
@@ -11,5 +12,9 @@ const (
 )
 
 func NewModel(workers []*worker.Worker) TableModel {
-	return NewTableModel(workers)
+	return NewTableModel(workers, nil)
+}
+
+func NewModelWithConfig(workers []*worker.Worker, cfg *config.Config) TableModel {
+	return NewTableModel(workers, cfg)
 }

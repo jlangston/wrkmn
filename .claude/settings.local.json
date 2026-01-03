@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "WebFetch(domain:blog.cloudflare.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:f1bonacc1.github.io)",
+      "WebFetch(domain:chromedevtools.github.io)",
+      "WebFetch(domain:www.gnu.org)",
+      "WebFetch(domain:catonmat.net)",
+      "WebFetch(domain:readline.kablamo.org)",
+      "WebFetch(domain:web.mit.edu)",
+      "WebFetch(domain:blog.sanctum.geek.nz)",
+      "WebFetch(domain:penchev.com)",
+      "WebFetch(domain:docs.w3cub.com)",
+      "Bash(go get:*)",
+      "Bash(go build:*)",
+      "Bash(cat:*)",
+      "Bash(done)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(go test:*)",
+      "Bash(go mod tidy:*)"
+    ]
+  }
+}

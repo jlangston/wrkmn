@@ -110,8 +110,25 @@ func runApp(cmd *cobra.Command, args []string) {
 	// Apply UI configuration (theme, transparency)
 	config.ApplyUIConfig(cfg)
 
-	// Discover workers
+	// Build workers from config processes first (they take priority)
 	var workers []*worker.Worker
+	configWorkerNames := make(map[string]bool)
+
+	for name, proc := range cfg.Processes {
+		w := &worker.Worker{
+			Name:   name,
+			Path:   proc.WorkingDir,
+			Status: worker.StatusStopped,
+			Port:   proc.InspectorPort,
+			Scripts: map[string]string{
+				"_config": proc.Command, // Special marker for config-based processes
+			},
+		}
+		workers = append(workers, w)
+		configWorkerNames[name] = true
+	}
+
+	// Discover additional workers (skip if already defined in config)
 	if cfg.Discovery.Enabled {
 		discoverer := worker.NewDiscoverer()
 		for _, path := range cfg.Discovery.Paths {
@@ -120,18 +137,24 @@ func runApp(cmd *cobra.Command, args []string) {
 				fmt.Fprintf(os.Stderr, "Warning: discovery failed for %s: %v\n", path, err)
 				continue
 			}
-			workers = append(workers, discovered...)
+			for _, w := range discovered {
+				// Skip if already defined in config
+				if configWorkerNames[w.Name] {
+					continue
+				}
+				workers = append(workers, w)
+			}
 		}
 	}
 
-	if len(workers) == 0 && len(cfg.Processes) == 0 {
+	if len(workers) == 0 {
 		fmt.Fprintln(os.Stderr, "No workers found and no processes defined")
 		fmt.Fprintln(os.Stderr, "Run 'wrkmn --help' for usage information")
 		os.Exit(1)
 	}
 
 	// Create and run TUI
-	m := ui.NewModel(workers)
+	m := ui.NewModelWithConfig(workers, cfg)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Set up signal handling for graceful shutdown

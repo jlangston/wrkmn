@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"wrkmn/internal/config"
 	"wrkmn/internal/process"
 	"wrkmn/internal/worker"
 )
@@ -16,6 +18,7 @@ import (
 type TableModel struct {
 	workers     []*worker.Worker
 	manager     *process.Manager
+	config      *config.Config
 	cursor      int
 	width       int
 	height      int
@@ -57,10 +60,11 @@ var (
 	}
 )
 
-func NewTableModel(workers []*worker.Worker) TableModel {
+func NewTableModel(workers []*worker.Worker, cfg *config.Config) TableModel {
 	return TableModel{
 		workers:     workers,
 		manager:     process.NewManager(),
+		config:      cfg,
 		currentView: ViewDashboard,
 		logView:     NewLogView(),
 	}
@@ -164,6 +168,23 @@ func (m TableModel) handleLogsViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m TableModel) startWorker(script string) TableModel {
 	if m.cursor < len(m.workers) {
 		w := m.workers[m.cursor]
+
+		// Check if this is a config-based process (has "_config" script marker)
+		if _, isConfig := w.Scripts["_config"]; isConfig && m.config != nil {
+			if proc, exists := m.config.Processes[w.Name]; exists {
+				p, err := m.manager.StartProcess(context.Background(), w.Name, &proc)
+				if err != nil {
+					w.Status = worker.StatusFailed
+				} else {
+					w.Status = worker.StatusRunning
+					// Store reference to worker in process for log viewing
+					p.Worker = w
+				}
+				return m
+			}
+		}
+
+		// Regular discovered worker with scripts
 		if err := m.manager.StartWorker(w, script); err != nil {
 			w.Status = worker.StatusFailed
 		}
@@ -174,7 +195,14 @@ func (m TableModel) startWorker(script string) TableModel {
 func (m TableModel) stopWorker() TableModel {
 	if m.cursor < len(m.workers) {
 		w := m.workers[m.cursor]
-		m.manager.StopWorker(w.Name)
+
+		// Check if this is a config-based process
+		if _, isConfig := w.Scripts["_config"]; isConfig {
+			m.manager.StopProcess(w.Name)
+		} else {
+			m.manager.StopWorker(w.Name)
+		}
+		w.Status = worker.StatusStopped
 	}
 	return m
 }
@@ -182,6 +210,21 @@ func (m TableModel) stopWorker() TableModel {
 func (m TableModel) startAllWorkers() TableModel {
 	for _, w := range m.workers {
 		if w.Status != worker.StatusRunning {
+			// Check if this is a config-based process
+			if _, isConfig := w.Scripts["_config"]; isConfig && m.config != nil {
+				if proc, exists := m.config.Processes[w.Name]; exists {
+					p, err := m.manager.StartProcess(context.Background(), w.Name, &proc)
+					if err != nil {
+						w.Status = worker.StatusFailed
+					} else {
+						w.Status = worker.StatusRunning
+						p.Worker = w
+					}
+				}
+				continue
+			}
+
+			// Regular discovered worker
 			script := "dev"
 			if !w.HasScript("dev") && w.HasScript("start") {
 				script = "start"
@@ -196,6 +239,10 @@ func (m TableModel) startAllWorkers() TableModel {
 
 func (m TableModel) stopAllWorkers() TableModel {
 	m.manager.StopAll()
+	// Update all worker statuses
+	for _, w := range m.workers {
+		w.Status = worker.StatusStopped
+	}
 	return m
 }
 
