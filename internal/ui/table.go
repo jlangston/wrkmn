@@ -24,6 +24,7 @@ type TableModel struct {
 	height      int
 	currentView ViewMode
 	logView     *LogView
+	scriptPopup *ScriptPopup
 }
 
 var (
@@ -67,6 +68,7 @@ func NewTableModel(workers []*worker.Worker, cfg *config.Config) TableModel {
 		config:      cfg,
 		currentView: ViewDashboard,
 		logView:     NewLogView(),
+		scriptPopup: NewScriptPopup(),
 	}
 }
 
@@ -82,6 +84,7 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.logView.SetSize(msg.Width, msg.Height)
+		m.scriptPopup.SetSize(msg.Width, msg.Height)
 		// Force a redraw after resize
 		if m.currentView == ViewLogs {
 			return m, m.logView.TickCmd()
@@ -91,10 +94,22 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.tickCmd()
 
 	case tea.KeyMsg:
+		// Handle script popup first if visible
+		if m.scriptPopup.Visible() {
+			cmd := m.scriptPopup.Update(msg)
+			return m, cmd
+		}
+
 		if m.currentView == ViewLogs {
 			return m.handleLogsViewKeys(msg)
 		}
 		return m.handleTableKeys(msg)
+	}
+
+	// Handle script popup messages (output, done)
+	if m.scriptPopup.Visible() {
+		cmd := m.scriptPopup.Update(msg)
+		return m, cmd
 	}
 
 	if m.currentView == ViewLogs {
@@ -126,8 +141,8 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
 		return m.startWorker("dev"), nil
 
-	// case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
-	// 	return m.startWorker("start"), nil
+	case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
+		return m.showScriptPopup()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("x"))):
 		return m.stopWorker(), nil
@@ -258,12 +273,81 @@ func (m TableModel) showLogs() (TableModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m TableModel) showScriptPopup() (TableModel, tea.Cmd) {
+	if m.cursor < len(m.workers) {
+		w := m.workers[m.cursor]
+		m.scriptPopup.Show(w)
+	}
+	return m, nil
+}
+
 func (m TableModel) View() string {
 	if m.currentView == ViewLogs {
 		return m.logView.View()
 	}
 
-	return m.renderTable()
+	tableView := m.renderTable()
+
+	// Overlay script popup if visible
+	if m.scriptPopup.Visible() {
+		popupView := m.scriptPopup.View()
+		// Center the popup on screen
+		return m.overlayPopup(tableView, popupView)
+	}
+
+	return tableView
+}
+
+// overlayPopup centers a popup over the background
+func (m TableModel) overlayPopup(background, popup string) string {
+	// Split background into lines
+	bgLines := strings.Split(background, "\n")
+
+	// Get popup dimensions
+	popupLines := strings.Split(popup, "\n")
+	popupHeight := len(popupLines)
+	popupWidth := 0
+	for _, line := range popupLines {
+		if len(line) > popupWidth {
+			popupWidth = len(line)
+		}
+	}
+
+	// Calculate center position
+	startY := (m.height - popupHeight) / 2
+	startX := (m.width - popupWidth) / 2
+	if startY < 0 {
+		startY = 0
+	}
+	if startX < 0 {
+		startX = 0
+	}
+
+	// Overlay popup onto background
+	for i, popupLine := range popupLines {
+		bgY := startY + i
+		if bgY >= 0 && bgY < len(bgLines) {
+			bgLine := bgLines[bgY]
+			// Pad background line if needed
+			for len(bgLine) < startX+len(popupLine) {
+				bgLine += " "
+			}
+			// Replace portion of background with popup
+			newLine := ""
+			if startX > 0 && startX < len(bgLine) {
+				newLine = bgLine[:startX]
+			} else {
+				newLine = strings.Repeat(" ", startX)
+			}
+			newLine += popupLine
+			if startX+len(popupLine) < len(bgLine) {
+				newLine += bgLine[startX+len(popupLine):]
+			}
+			bgLines[bgY] = newLine
+		}
+	}
+
+	return strings.Join(bgLines, "\n")
 }
 
 func (m TableModel) renderTable() string {
@@ -297,7 +381,7 @@ func (m TableModel) renderTable() string {
 	helpText := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		Padding(0, 1).
-		Render("j/k: navigate • d: dev • x: stop • a: start all • z: stop all • l: logs • q: quit")
+		Render("j/k: navigate • d: dev • s: scripts • x: stop • a: all • z: stop all • l: logs • q: quit")
 
 	// Add main container with border
 	mainContent := lipgloss.JoinVertical(

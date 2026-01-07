@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -314,13 +315,14 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 		cmd.Dir = cfg.WorkingDir
 	}
 
-	// Set environment variables
+	// Set environment variables (inherit current env and add custom vars)
 	if len(cfg.Environment) > 0 {
-		cmd.Env = make([]string, 0, len(cfg.Environment))
+		cmd.Env = os.Environ() // Start with current environment
 		for k, v := range cfg.Environment {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 		}
 	}
+	// If no custom env vars, cmd.Env stays nil which inherits parent env
 
 	// Set process group to handle signals properly
 	cmd.SysProcAttr = &syscall.SysProcAttr{

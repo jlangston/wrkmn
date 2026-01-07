@@ -22,9 +22,13 @@ type ConsoleEntry struct {
 type ConsoleView struct {
 	session   *debug.Session
 	evaluator *debug.Evaluator
+	completer *debug.Completer
 
 	// VI mode input
 	input *vi.Model
+
+	// Autocomplete
+	autocomplete *AutocompletePopup
 
 	// Console history
 	entries      []ConsoleEntry
@@ -44,10 +48,12 @@ func NewConsoleView(session *debug.Session, evaluator *debug.Evaluator) *Console
 	input.SetPrompt("> ")
 
 	return &ConsoleView{
-		session:   session,
-		evaluator: evaluator,
-		input:     input,
-		entries:   make([]ConsoleEntry, 0),
+		session:      session,
+		evaluator:    evaluator,
+		completer:    debug.NewCompleter(session, evaluator),
+		input:        input,
+		autocomplete: NewAutocompletePopup(),
+		entries:      make([]ConsoleEntry, 0),
 	}
 }
 
@@ -115,6 +121,17 @@ func (v *ConsoleView) Update(msg tea.Msg) tea.Cmd {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Handle autocomplete popup first
+		if v.autocomplete.Visible() {
+			handled, selected := v.autocomplete.Update(msg)
+			if handled {
+				if selected != nil {
+					v.applyCompletion(selected)
+				}
+				return nil
+			}
+		}
+
 		// Handle scroll keys in output area
 		switch msg.String() {
 		case "ctrl+l":
@@ -132,11 +149,23 @@ func (v *ConsoleView) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 
+		// Handle Tab for autocomplete in insert mode
+		if msg.Type == tea.KeyTab && v.input.Mode() == vi.ModeInsert {
+			v.triggerCompletion()
+			return nil
+		}
+
+		// Hide autocomplete on typing
+		if v.autocomplete.Visible() && msg.Type != tea.KeyTab {
+			v.autocomplete.Hide()
+		}
+
 		// Pass to VI input
 		result := v.input.HandleKey(msg)
 
 		switch result.Action {
 		case vi.ActionSubmit:
+			v.autocomplete.Hide()
 			return v.executeCommand()
 		case vi.ActionHistoryPrev, vi.ActionHistoryNext:
 			// History navigation already handled by VI model
@@ -144,6 +173,95 @@ func (v *ConsoleView) Update(msg tea.Msg) tea.Cmd {
 	}
 
 	return nil
+}
+
+// triggerCompletion fetches and displays completions
+func (v *ConsoleView) triggerCompletion() {
+	input := v.input.Value()
+	cursorPos := v.input.Cursor()
+
+	completions, err := v.completer.GetCompletions(input, cursorPos)
+	if err != nil || len(completions) == 0 {
+		v.autocomplete.Hide()
+		return
+	}
+
+	// If only one completion, apply it directly
+	if len(completions) == 1 {
+		v.applyCompletion(&completions[0])
+		return
+	}
+
+	// Show popup above the input line
+	// Position is relative to the input area
+	x := len(v.input.Value()[:v.input.Cursor()]) + 2 // Account for prompt
+	y := 0                                           // Will be positioned in View
+
+	v.autocomplete.Show(completions, x, y)
+}
+
+// applyCompletion inserts the selected completion
+func (v *ConsoleView) applyCompletion(comp *debug.Completion) {
+	input := v.input.Value()
+	cursorPos := v.input.Cursor()
+
+	// Find the prefix to replace
+	prefix := getCompletionPrefix(input, cursorPos)
+	prefixStart := cursorPos - len(prefix)
+
+	// Build new input
+	before := input[:prefixStart]
+	after := ""
+	if cursorPos < len(input) {
+		after = input[cursorPos:]
+	}
+
+	newInput := before + comp.Text + after
+	newCursor := prefixStart + len(comp.Text)
+
+	v.input.SetValue(newInput)
+	// Move cursor to end of inserted text
+	v.input.SetValue(newInput) // SetValue already puts cursor at end
+
+	// We need to position cursor correctly
+	// The VI model's SetValue puts cursor at end, so adjust if needed
+	_ = newCursor
+
+	v.autocomplete.Hide()
+}
+
+// getCompletionPrefix extracts the prefix being completed
+func getCompletionPrefix(input string, cursorPos int) string {
+	if cursorPos > len(input) {
+		cursorPos = len(input)
+	}
+
+	text := input[:cursorPos]
+
+	// Find the start of the current identifier
+	start := cursorPos
+	for i := cursorPos - 1; i >= 0; i-- {
+		r := rune(text[i])
+		if isCompletionChar(r) {
+			start = i
+		} else if r == '.' {
+			// Include just the part after the dot
+			start = i + 1
+			break
+		} else {
+			break
+		}
+	}
+
+	return text[start:cursorPos]
+}
+
+// isCompletionChar returns true if the rune can be part of an identifier
+func isCompletionChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r == '_' || r == '$'
 }
 
 // executeCommand executes the current input
@@ -200,6 +318,11 @@ func (v *ConsoleView) handleCommand(cmd string) tea.Cmd {
 		v.AddInfo("  :clear, :c   - Clear console")
 		v.AddInfo("  :help, :h    - Show help")
 		v.AddInfo("")
+		v.AddInfo("Autocomplete:")
+		v.AddInfo("  Tab          - Trigger/cycle completions")
+		v.AddInfo("  Enter        - Accept completion")
+		v.AddInfo("  Esc          - Dismiss completions")
+		v.AddInfo("")
 		v.AddInfo("VI Mode:")
 		v.AddInfo("  i, a, A      - Enter insert mode")
 		v.AddInfo("  Esc          - Normal mode")
@@ -243,7 +366,69 @@ func (v *ConsoleView) View() string {
 		Foreground(t.Border).
 		Render(strings.Repeat("─", v.width-4))
 
-	return v.renderContainer(header, output, separator, inputArea)
+	containerView := v.renderContainer(header, output, separator, inputArea)
+
+	// Overlay autocomplete popup if visible
+	if v.autocomplete.Visible() {
+		containerView = v.overlayAutocomplete(containerView)
+	}
+
+	return containerView
+}
+
+// overlayAutocomplete renders the autocomplete popup over the console
+func (v *ConsoleView) overlayAutocomplete(base string) string {
+	popup := v.autocomplete.View()
+	if popup == "" {
+		return base
+	}
+
+	baseLines := strings.Split(base, "\n")
+	popupLines := strings.Split(popup, "\n")
+
+	// Position popup above the input line (last few lines of base)
+	// The input is near the bottom, so place popup just above it
+	popupY := len(baseLines) - len(popupLines) - 3 // 3 lines from bottom (input, separator, padding)
+	if popupY < 2 {
+		popupY = 2
+	}
+
+	popupX, _ := v.autocomplete.GetPosition()
+	popupX = min(popupX+2, v.width-lipgloss.Width(popupLines[0])-4) // Ensure it fits
+	if popupX < 2 {
+		popupX = 2
+	}
+
+	// Overlay popup onto base
+	for i, popupLine := range popupLines {
+		lineIdx := popupY + i
+		if lineIdx < 0 || lineIdx >= len(baseLines) {
+			continue
+		}
+
+		baseLine := baseLines[lineIdx]
+		baseRunes := []rune(baseLine)
+
+		// Ensure base line is long enough
+		for len(baseRunes) < popupX {
+			baseRunes = append(baseRunes, ' ')
+		}
+
+		// Replace characters with popup content
+		popupRunes := []rune(popupLine)
+		for j, r := range popupRunes {
+			pos := popupX + j
+			if pos < len(baseRunes) {
+				baseRunes[pos] = r
+			} else {
+				baseRunes = append(baseRunes, r)
+			}
+		}
+
+		baseLines[lineIdx] = string(baseRunes)
+	}
+
+	return strings.Join(baseLines, "\n")
 }
 
 // renderOutput renders the output area
