@@ -16,15 +16,17 @@ import (
 )
 
 type TableModel struct {
-	workers     []*worker.Worker
-	manager     *process.Manager
-	config      *config.Config
-	cursor      int
-	width       int
-	height      int
-	currentView ViewMode
-	logView     *LogView
-	scriptPopup *ScriptPopup
+	workers        []*worker.Worker
+	manager        *process.Manager
+	config         *config.Config
+	cursor         int
+	width          int
+	height         int
+	currentView    ViewMode
+	logView        *LogView
+	scriptPopup    *ScriptPopup
+	remoteLogsView *RemoteLogsView
+	envSelector    *EnvSelector
 }
 
 var (
@@ -63,12 +65,14 @@ var (
 
 func NewTableModel(workers []*worker.Worker, cfg *config.Config) TableModel {
 	return TableModel{
-		workers:     workers,
-		manager:     process.NewManager(),
-		config:      cfg,
-		currentView: ViewDashboard,
-		logView:     NewLogView(),
-		scriptPopup: NewScriptPopup(),
+		workers:        workers,
+		manager:        process.NewManager(),
+		config:         cfg,
+		currentView:    ViewDashboard,
+		logView:        NewLogView(),
+		scriptPopup:    NewScriptPopup(),
+		remoteLogsView: NewRemoteLogsView(),
+		envSelector:    NewEnvSelector(),
 	}
 }
 
@@ -85,6 +89,8 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.logView.SetSize(msg.Width, msg.Height)
 		m.scriptPopup.SetSize(msg.Width, msg.Height)
+		m.remoteLogsView.SetSize(msg.Width, msg.Height)
+		m.envSelector.SetSize(msg.Width, msg.Height)
 		// Force a redraw after resize
 		if m.currentView == ViewLogs {
 			return m, m.logView.TickCmd()
@@ -94,7 +100,13 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.tickCmd()
 
 	case tea.KeyMsg:
-		// Handle script popup first if visible
+		// Handle env selector first if visible
+		if m.envSelector.Visible() {
+			cmd := m.envSelector.Update(msg)
+			return m, cmd
+		}
+
+		// Handle script popup if visible
 		if m.scriptPopup.Visible() {
 			cmd := m.scriptPopup.Update(msg)
 			return m, cmd
@@ -103,12 +115,21 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == ViewLogs {
 			return m.handleLogsViewKeys(msg)
 		}
+		if m.currentView == ViewRemoteLogs {
+			return m.handleRemoteLogsViewKeys(msg)
+		}
 		return m.handleTableKeys(msg)
 	}
 
 	// Handle script popup messages (output, done)
 	if m.scriptPopup.Visible() {
 		cmd := m.scriptPopup.Update(msg)
+		return m, cmd
+	}
+
+	// Handle remote logs messages
+	if m.currentView == ViewRemoteLogs {
+		cmd := m.remoteLogsView.Update(msg)
 		return m, cmd
 	}
 
@@ -157,7 +178,10 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.showLogs()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
-		return m, nil
+		return m.showRemoteLogs()
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("e"))):
+		return m.showEnvSelector()
 	}
 
 	return m, nil
@@ -177,6 +201,23 @@ func (m TableModel) handleLogsViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.logView, cmd = m.logView.Update(msg)
+	return m, cmd
+}
+
+func (m TableModel) handleRemoteLogsViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, key.NewBinding(key.WithKeys("q", "esc"))):
+		m.remoteLogsView.Close()
+		m.currentView = ViewDashboard
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))):
+		m.remoteLogsView.Close()
+		m.manager.StopAll()
+		return m, tea.Quit
+	}
+
+	cmd := m.remoteLogsView.Update(msg)
 	return m, cmd
 }
 
@@ -281,12 +322,50 @@ func (m TableModel) showScriptPopup() (TableModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m TableModel) showRemoteLogs() (TableModel, tea.Cmd) {
+	if m.cursor < len(m.workers) {
+		w := m.workers[m.cursor]
+
+		// Only show for Cloudflare Workers with wrangler config
+		if !w.IsCloudflareWorker() {
+			return m, nil
+		}
+
+		m.currentView = ViewRemoteLogs
+		cmd := m.remoteLogsView.Init(w)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m TableModel) showEnvSelector() (TableModel, tea.Cmd) {
+	if m.cursor < len(m.workers) {
+		w := m.workers[m.cursor]
+
+		// Only show for workers with multiple environments
+		if w.HasEnvironments() {
+			m.envSelector.Show(w)
+		}
+	}
+	return m, nil
+}
+
 func (m TableModel) View() string {
 	if m.currentView == ViewLogs {
 		return m.logView.View()
 	}
 
+	if m.currentView == ViewRemoteLogs {
+		return m.remoteLogsView.View()
+	}
+
 	tableView := m.renderTable()
+
+	// Overlay env selector if visible
+	if m.envSelector.Visible() {
+		popupView := m.envSelector.View()
+		return m.overlayPopup(tableView, popupView)
+	}
 
 	// Overlay script popup if visible
 	if m.scriptPopup.Visible() {
@@ -381,7 +460,7 @@ func (m TableModel) renderTable() string {
 	helpText := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		Padding(0, 1).
-		Render("j/k: navigate • d: dev • s: scripts • x: stop • a: all • z: stop all • l: logs • q: quit")
+		Render("j/k: navigate • d: dev • s: scripts • r: remote logs • e: env • x: stop • a: all • l: logs • q: quit")
 
 	// Add main container with border
 	mainContent := lipgloss.JoinVertical(

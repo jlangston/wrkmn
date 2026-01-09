@@ -4,11 +4,12 @@ package ui
 type ViewMode int
 
 const (
-	ViewDashboard ViewMode = iota // Main process list view
-	ViewMonitor                   // 4-panel metrics/status view
-	ViewLogs                      // Log viewer for selected process
-	ViewDebug                     // Debug view (CF Workers only)
-	ViewHelp                      // Help overlay
+	ViewDashboard   ViewMode = iota // Main process list view
+	ViewMonitor                     // 4-panel metrics/status view
+	ViewLogs                        // Log viewer for selected process
+	ViewRemoteLogs                  // Remote log tailing (CF Workers only)
+	ViewDebug                       // Debug view (CF Workers only)
+	ViewHelp                        // Help overlay
 )
 
 func (v ViewMode) String() string {
@@ -19,6 +20,8 @@ func (v ViewMode) String() string {
 		return "Monitor"
 	case ViewLogs:
 		return "Logs"
+	case ViewRemoteLogs:
+		return "Remote Logs"
 	case ViewDebug:
 		return "Debug"
 	case ViewHelp:

@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+
+	"wrkmn/internal/wrangler"
 )
 
 type Discoverer struct {
@@ -83,7 +86,41 @@ func (d *Discoverer) parseWorkerFromPackageJSON(packageJSONPath string) (*Worker
 		Status:      StatusStopped,
 	}
 
+	// Parse wrangler.toml if present
+	d.parseWranglerConfig(worker)
+
 	return worker, nil
+}
+
+// parseWranglerConfig loads and parses wrangler.toml for a worker
+func (d *Discoverer) parseWranglerConfig(w *Worker) {
+	if !wrangler.Exists(w.Path) {
+		return
+	}
+
+	config, err := wrangler.LoadFromDirectory(w.Path)
+	if err != nil {
+		// Log warning but continue - worker can still function without wrangler config
+		fmt.Printf("Warning: Failed to parse wrangler.toml for %s: %v\n", w.Name, err)
+		return
+	}
+
+	w.WranglerConfig = config
+
+	// Use name from wrangler.toml if available
+	if config.Name != "" {
+		w.Name = config.Name
+	}
+
+	// Set account ID from root config
+	w.AccountID = config.AccountID
+
+	// Extract and sort environments
+	w.Environments = config.GetEnvironments()
+	sort.Strings(w.Environments)
+
+	// Default to "production" (the root config)
+	w.SelectedEnv = "production"
 }
 
 func (d *Discoverer) hasWranglerScripts(scripts map[string]string) bool {

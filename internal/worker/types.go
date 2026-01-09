@@ -1,6 +1,10 @@
 package worker
 
-import "time"
+import (
+	"time"
+
+	"wrkmn/internal/wrangler"
+)
 
 type Worker struct {
 	Name        string            `json:"name"`
@@ -10,6 +14,18 @@ type Worker struct {
 	Port        int               `json:"port"`
 	Status      WorkerStatus      `json:"status"`
 	LastUpdated time.Time         `json:"last_updated"`
+
+	// Wrangler configuration (parsed from wrangler.toml)
+	WranglerConfig *wrangler.Config `json:"-"`
+
+	// Available environments from wrangler.toml (e.g., "production", "staging")
+	Environments []string `json:"environments,omitempty"`
+
+	// Currently selected environment for remote operations (logs, analytics)
+	SelectedEnv string `json:"selected_env,omitempty"`
+
+	// AccountID from wrangler.toml (root level)
+	AccountID string `json:"account_id,omitempty"`
 }
 
 type PackageJSON struct {
@@ -38,4 +54,28 @@ func (w *Worker) GetDevPort() int {
 func (w *Worker) HasScript(script string) bool {
 	_, exists := w.Scripts[script]
 	return exists
+}
+
+// GetAccountIDForEnv returns the account ID for the given environment.
+// Falls back to the root account ID if the environment doesn't have a specific one.
+func (w *Worker) GetAccountIDForEnv(env string) string {
+	if w.WranglerConfig == nil {
+		return w.AccountID
+	}
+	return w.WranglerConfig.GetAccountID(env)
+}
+
+// GetCurrentAccountID returns the account ID for the currently selected environment
+func (w *Worker) GetCurrentAccountID() string {
+	return w.GetAccountIDForEnv(w.SelectedEnv)
+}
+
+// HasEnvironments returns true if the worker has multiple environments configured
+func (w *Worker) HasEnvironments() bool {
+	return len(w.Environments) > 1
+}
+
+// IsCloudflareWorker returns true if this worker has a wrangler.toml configuration
+func (w *Worker) IsCloudflareWorker() bool {
+	return w.WranglerConfig != nil
 }
