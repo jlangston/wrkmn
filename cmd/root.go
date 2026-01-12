@@ -163,15 +163,20 @@ func runApp(cmd *cobra.Command, args []string) {
 
 	go func() {
 		<-sigChan
+		// Stop all processes first for proper cleanup
 		m.GetManager().StopAll()
-		p.Kill()
-		os.Exit(0)
+		// Send quit message to tea program instead of os.Exit
+		// This allows deferred cleanup functions to run
+		p.Quit()
 	}()
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running program: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Ensure all processes are stopped after tea program exits
+	m.GetManager().StopAll()
 }
 
 // versionCmd shows version information

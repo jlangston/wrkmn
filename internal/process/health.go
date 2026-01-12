@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"wrkmn/internal/config"
@@ -188,7 +190,8 @@ type HealthMonitor struct {
 	checker     *HealthChecker
 	graph       *DependencyGraph
 	stopCh      chan struct{}
-	failCount   int
+	stopOnce    sync.Once
+	failCount   atomic.Int32
 	startTime   time.Time
 	inStartup   bool
 }
@@ -244,24 +247,26 @@ func (m *HealthMonitor) doCheck(ctx context.Context) {
 	result := m.checker.Check(ctx, m.config)
 
 	if result.Healthy {
-		m.failCount = 0
+		m.failCount.Store(0)
 		m.graph.UpdateHealth(m.name, HealthHealthy)
 	} else {
-		m.failCount++
+		currentFails := m.failCount.Add(1)
 		retries := m.config.Retries
 		if retries == 0 {
 			retries = config.DefaultHealthCheckRetries
 		}
 
-		if m.failCount >= retries {
+		if int(currentFails) >= retries {
 			m.graph.UpdateHealth(m.name, HealthUnhealthy)
 		}
 	}
 }
 
-// Stop stops the health monitor
+// Stop stops the health monitor (safe to call multiple times)
 func (m *HealthMonitor) Stop() {
-	close(m.stopCh)
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+	})
 }
 
 // WaitForHealthy blocks until the process becomes healthy or timeout

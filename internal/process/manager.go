@@ -163,6 +163,7 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		stdout.Close() // Close stdout pipe to prevent leak
 		cancel()
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
@@ -186,14 +187,26 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 	go m.readLogs(stdout, logBuffer, "STDOUT")
 	go m.readLogs(stderr, logBuffer, "STDERR")
 
-	go func() {
-		cmd.Wait()
-		m.mu.Lock()
-		if proc, exists := m.processes[w.Name]; exists {
-			proc.Worker.Status = worker.StatusStopped
+	// Use a goroutine that can be interrupted by context cancellation
+	go func(ctx context.Context, name string) {
+		done := make(chan struct{})
+		go func() {
+			cmd.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			m.mu.Lock()
+			if proc, exists := m.processes[name]; exists && proc.Worker != nil {
+				proc.Worker.Status = worker.StatusStopped
+			}
+			m.mu.Unlock()
+		case <-ctx.Done():
+			// Context cancelled, process is being stopped externally
+			// No need to update status as StopWorker handles it
 		}
-		m.mu.Unlock()
-	}()
+	}(ctx, w.Name)
 
 	w.Status = worker.StatusRunning
 	return nil
@@ -253,34 +266,43 @@ func (m *Manager) StopAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for name, process := range m.processes {
-		// Kill the entire process group to prevent orphaned processes
-		if process.Cmd.Process != nil {
+	// Collect all processes before modifying the map
+	processes := make([]*Process, 0, len(m.processes))
+	for _, process := range m.processes {
+		processes = append(processes, process)
+	}
+
+	// Send SIGTERM to all process groups
+	for _, process := range processes {
+		if process.Cmd != nil && process.Cmd.Process != nil {
 			pgid, err := syscall.Getpgid(process.Cmd.Process.Pid)
 			if err == nil {
-				// Kill the entire process group
 				syscall.Kill(-pgid, syscall.SIGTERM)
 			}
 		}
-		process.Cancel()
-		if process.Worker != nil {
-			process.Worker.Status = worker.StatusStopped
-		}
-		delete(m.processes, name)
 	}
 
 	// Give processes time to gracefully shut down
 	time.Sleep(200 * time.Millisecond)
 
 	// Force kill any remaining processes
-	for _, process := range m.processes {
-		if process.Cmd.Process != nil {
+	for _, process := range processes {
+		if process.Cmd != nil && process.Cmd.Process != nil {
 			pgid, err := syscall.Getpgid(process.Cmd.Process.Pid)
 			if err == nil {
 				syscall.Kill(-pgid, syscall.SIGKILL)
 			}
 		}
+		if process.Cancel != nil {
+			process.Cancel()
+		}
+		if process.Worker != nil {
+			process.Worker.Status = worker.StatusStopped
+		}
 	}
+
+	// Clear the map
+	m.processes = make(map[string]*Process)
 }
 
 func (m *Manager) readLogs(reader io.Reader, buffer *CircularBuffer, prefix string) {
@@ -340,6 +362,7 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		stdout.Close() // Close stdout pipe to prevent leak
 		cancel()
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
@@ -364,12 +387,24 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 	go m.readLogs(stdout, logBuffer, "STDOUT")
 	go m.readLogs(stderr, logBuffer, "STDERR")
 
-	go func() {
-		cmd.Wait()
-		m.mu.Lock()
-		// Mark process as stopped when it exits
-		m.mu.Unlock()
-	}()
+	// Use a goroutine that can be interrupted by context cancellation
+	go func(ctx context.Context, processName string) {
+		done := make(chan struct{})
+		go func() {
+			cmd.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Process exited naturally
+			m.mu.Lock()
+			// Mark process as stopped when it exits
+			m.mu.Unlock()
+		case <-ctx.Done():
+			// Context cancelled, process is being stopped externally
+		}
+	}(ctx, name)
 
 	return process, nil
 }

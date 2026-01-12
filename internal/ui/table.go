@@ -99,6 +99,41 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateMsg:
 		return m, m.tickCmd()
 
+	case processStartedMsg:
+		// Update worker status based on result
+		for _, w := range m.workers {
+			if w.Name == msg.workerName {
+				if msg.err != nil {
+					w.Status = worker.StatusFailed
+				} else {
+					w.Status = worker.StatusRunning
+				}
+				break
+			}
+		}
+		return m, nil
+
+	case processStoppedMsg:
+		// Update worker status
+		for _, w := range m.workers {
+			if w.Name == msg.workerName {
+				w.Status = worker.StatusStopped
+				break
+			}
+		}
+		return m, nil
+
+	case allProcessesStartedMsg:
+		// All processes started, nothing else to do
+		return m, nil
+
+	case allProcessesStoppedMsg:
+		// All processes stopped, update all worker statuses
+		for _, w := range m.workers {
+			w.Status = worker.StatusStopped
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		// Handle env selector first if visible
 		if m.envSelector.Visible() {
@@ -160,19 +195,19 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
-		return m.startWorker("dev"), nil
+		return m.startWorker("dev")
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
 		return m.showScriptPopup()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("x"))):
-		return m.stopWorker(), nil
+		return m.stopWorker()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("a"))):
-		return m.startAllWorkers(), nil
+		return m.startAllWorkers()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("z"))):
-		return m.stopAllWorkers(), nil
+		return m.stopAllWorkers()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("l", "enter"))):
 		return m.showLogs()
@@ -221,85 +256,137 @@ func (m TableModel) handleRemoteLogsViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd
 	return m, cmd
 }
 
-func (m TableModel) startWorker(script string) TableModel {
-	if m.cursor < len(m.workers) {
-		w := m.workers[m.cursor]
+func (m TableModel) startWorker(script string) (TableModel, tea.Cmd) {
+	if m.cursor >= len(m.workers) {
+		return m, nil
+	}
 
-		// Check if this is a config-based process (has "_config" script marker)
-		if _, isConfig := w.Scripts["_config"]; isConfig && m.config != nil {
-			if proc, exists := m.config.Processes[w.Name]; exists {
-				p, err := m.manager.StartProcess(context.Background(), w.Name, &proc)
-				if err != nil {
-					w.Status = worker.StatusFailed
-				} else {
-					w.Status = worker.StatusRunning
-					// Store reference to worker in process for log viewing
+	w := m.workers[m.cursor]
+	workerName := w.Name
+
+	// Set status to starting
+	w.Status = worker.StatusStarting
+
+	// Check if this is a config-based process (has "_config" script marker)
+	if _, isConfig := w.Scripts["_config"]; isConfig && m.config != nil {
+		if proc, exists := m.config.Processes[w.Name]; exists {
+			procCopy := proc // Copy for closure
+
+			// Resolve env files and merge with inline environment
+			resolvedEnv, _ := config.ResolveEnvFiles(&procCopy, m.config.Defaults, m.config.BaseDir)
+			if len(resolvedEnv) > 0 {
+				procCopy.Environment = resolvedEnv
+			}
+
+			return m, func() tea.Msg {
+				p, err := m.manager.StartProcess(context.Background(), workerName, &procCopy)
+				if err == nil && p != nil {
 					p.Worker = w
 				}
-				return m
+				return processStartedMsg{workerName: workerName, err: err}
 			}
 		}
-
-		// Regular discovered worker with scripts
-		if err := m.manager.StartWorker(w, script); err != nil {
-			w.Status = worker.StatusFailed
-		}
 	}
-	return m
+
+	// Regular discovered worker with scripts
+	return m, func() tea.Msg {
+		err := m.manager.StartWorker(w, script)
+		return processStartedMsg{workerName: workerName, err: err}
+	}
 }
 
-func (m TableModel) stopWorker() TableModel {
-	if m.cursor < len(m.workers) {
-		w := m.workers[m.cursor]
+func (m TableModel) stopWorker() (TableModel, tea.Cmd) {
+	if m.cursor >= len(m.workers) {
+		return m, nil
+	}
+
+	w := m.workers[m.cursor]
+	workerName := w.Name
+	isConfig := false
+	if _, ok := w.Scripts["_config"]; ok {
+		isConfig = true
+	}
+
+	return m, func() tea.Msg {
+		var err error
+		if isConfig {
+			err = m.manager.StopProcess(workerName)
+		} else {
+			err = m.manager.StopWorker(workerName)
+		}
+		return processStoppedMsg{workerName: workerName, err: err}
+	}
+}
+
+func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
+	// Collect workers to start
+	type workerToStart struct {
+		w        *worker.Worker
+		script   string
+		isConfig bool
+		proc     *config.Process
+	}
+
+	var toStart []workerToStart
+	for _, w := range m.workers {
+		if w.Status == worker.StatusRunning {
+			continue
+		}
+
+		// Set status to starting
+		w.Status = worker.StatusStarting
 
 		// Check if this is a config-based process
-		if _, isConfig := w.Scripts["_config"]; isConfig {
-			m.manager.StopProcess(w.Name)
-		} else {
-			m.manager.StopWorker(w.Name)
-		}
-		w.Status = worker.StatusStopped
-	}
-	return m
-}
+		if _, isConfig := w.Scripts["_config"]; isConfig && m.config != nil {
+			if proc, exists := m.config.Processes[w.Name]; exists {
+				procCopy := proc
 
-func (m TableModel) startAllWorkers() TableModel {
-	for _, w := range m.workers {
-		if w.Status != worker.StatusRunning {
-			// Check if this is a config-based process
-			if _, isConfig := w.Scripts["_config"]; isConfig && m.config != nil {
-				if proc, exists := m.config.Processes[w.Name]; exists {
-					p, err := m.manager.StartProcess(context.Background(), w.Name, &proc)
-					if err != nil {
-						w.Status = worker.StatusFailed
-					} else {
-						w.Status = worker.StatusRunning
-						p.Worker = w
-					}
+				// Resolve env files and merge with inline environment
+				resolvedEnv, _ := config.ResolveEnvFiles(&procCopy, m.config.Defaults, m.config.BaseDir)
+				if len(resolvedEnv) > 0 {
+					procCopy.Environment = resolvedEnv
 				}
-				continue
-			}
 
-			// Regular discovered worker
-			script := "dev"
-			if !w.HasScript("dev") && w.HasScript("start") {
-				script = "start"
+				toStart = append(toStart, workerToStart{w: w, isConfig: true, proc: &procCopy})
 			}
-			if w.HasScript(script) {
-				m.manager.StartWorker(w, script)
-			}
+			continue
+		}
+
+		// Regular discovered worker
+		script := "dev"
+		if !w.HasScript("dev") && w.HasScript("start") {
+			script = "start"
+		}
+		if w.HasScript(script) {
+			toStart = append(toStart, workerToStart{w: w, script: script, isConfig: false})
 		}
 	}
-	return m
+
+	if len(toStart) == 0 {
+		return m, nil
+	}
+
+	// Start all workers asynchronously
+	return m, func() tea.Msg {
+		for _, ws := range toStart {
+			if ws.isConfig {
+				p, err := m.manager.StartProcess(context.Background(), ws.w.Name, ws.proc)
+				if err == nil && p != nil {
+					p.Worker = ws.w
+				}
+			} else {
+				m.manager.StartWorker(ws.w, ws.script)
+			}
+		}
+		return allProcessesStartedMsg{}
+	}
 }
 
-func (m TableModel) stopAllWorkers() TableModel {
-	m.manager.StopAll()
-	// Update all worker statuses
-	for _, w := range m.workers {
-		w.Status = worker.StatusStopped
+func (m TableModel) stopAllWorkers() (TableModel, tea.Cmd) {
+	return m, func() tea.Msg {
+		m.manager.StopAll()
+		return allProcessesStoppedMsg{}
 	}
-	return m
 }
 
 func (m TableModel) showLogs() (TableModel, tea.Cmd) {
@@ -382,15 +469,10 @@ func (m TableModel) overlayPopup(background, popup string) string {
 	// Split background into lines
 	bgLines := strings.Split(background, "\n")
 
-	// Get popup dimensions
+	// Get popup dimensions using visual width (not byte length)
 	popupLines := strings.Split(popup, "\n")
 	popupHeight := len(popupLines)
-	popupWidth := 0
-	for _, line := range popupLines {
-		if len(line) > popupWidth {
-			popupWidth = len(line)
-		}
-	}
+	popupWidth := lipgloss.Width(popup) // Use visual width for centering
 
 	// Calculate center position
 	startY := (m.height - popupHeight) / 2
@@ -407,22 +489,34 @@ func (m TableModel) overlayPopup(background, popup string) string {
 		bgY := startY + i
 		if bgY >= 0 && bgY < len(bgLines) {
 			bgLine := bgLines[bgY]
-			// Pad background line if needed
-			for len(bgLine) < startX+len(popupLine) {
-				bgLine += " "
+			bgLineWidth := lipgloss.Width(bgLine)
+			popupLineWidth := lipgloss.Width(popupLine)
+
+			// Build the new line using strings.Builder for efficiency
+			var newLine strings.Builder
+
+			// Add left portion (spaces for padding)
+			if startX > bgLineWidth {
+				// Need more padding than we have background
+				newLine.WriteString(bgLine)
+				newLine.WriteString(strings.Repeat(" ", startX-bgLineWidth))
+			} else if startX > 0 {
+				// Take prefix from background (approximate - may not be exact due to ANSI)
+				newLine.WriteString(strings.Repeat(" ", startX))
 			}
-			// Replace portion of background with popup
-			newLine := ""
-			if startX > 0 && startX < len(bgLine) {
-				newLine = bgLine[:startX]
-			} else {
-				newLine = strings.Repeat(" ", startX)
+
+			// Add popup line
+			newLine.WriteString(popupLine)
+
+			// Add right portion if background extends beyond popup
+			rightStart := startX + popupLineWidth
+			if rightStart < bgLineWidth {
+				// Approximate by adding spaces
+				remaining := bgLineWidth - rightStart
+				newLine.WriteString(strings.Repeat(" ", remaining))
 			}
-			newLine += popupLine
-			if startX+len(popupLine) < len(bgLine) {
-				newLine += bgLine[startX+len(popupLine):]
-			}
-			bgLines[bgY] = newLine
+
+			bgLines[bgY] = newLine.String()
 		}
 	}
 
@@ -616,6 +710,24 @@ func (m TableModel) formatDuration(d time.Duration) string {
 }
 
 type UpdateMsg struct{}
+
+// processStartedMsg is sent when a process start operation completes
+type processStartedMsg struct {
+	workerName string
+	err        error
+}
+
+// processStoppedMsg is sent when a process stop operation completes
+type processStoppedMsg struct {
+	workerName string
+	err        error
+}
+
+// allProcessesStartedMsg is sent when all processes have been started
+type allProcessesStartedMsg struct{}
+
+// allProcessesStoppedMsg is sent when all processes have been stopped
+type allProcessesStoppedMsg struct{}
 
 func (m TableModel) tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg {

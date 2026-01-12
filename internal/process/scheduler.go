@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -282,13 +283,15 @@ func (s *Scheduler) waitForDependency(ctx context.Context, dep config.Dependency
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	timeout := time.After(5 * time.Minute) // Default timeout
+	// Use Timer instead of time.After to allow proper cleanup
+	timer := time.NewTimer(5 * time.Minute)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-timeout:
+		case <-timer.C:
 			return fmt.Errorf("timeout waiting for %s", dep.Process)
 		case <-ticker.C:
 			depNode := s.graph.GetNode(dep.Process)
@@ -321,7 +324,8 @@ func (s *Scheduler) sendEvent(event StartEvent) {
 	select {
 	case s.events <- event:
 	default:
-		// Channel full, drop event
+		// Channel full, log warning about dropped event
+		log.Printf("warning: scheduler event channel full, dropping event: %s %s", event.Name, event.Type)
 	}
 }
 

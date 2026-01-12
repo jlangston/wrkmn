@@ -374,6 +374,15 @@ func (lv *LogView) View() string {
 		return "No process selected"
 	}
 
+	// Get process name (handle nil Worker)
+	processName := lv.process.Name
+	if lv.process.Worker != nil {
+		processName = lv.process.Worker.Name
+	}
+	if processName == "" {
+		processName = "unknown"
+	}
+
 	// Title bar
 	title := lipgloss.NewStyle().
 		Background(lipgloss.Color("62")).
@@ -381,7 +390,7 @@ func (lv *LogView) View() string {
 		Padding(0, 1).
 		Width(lv.width).
 		Align(lipgloss.Center).
-		Render("📄 Logs: " + lv.process.Worker.Name)
+		Render("Logs: " + processName)
 
 	// Mode/status line
 	modeStyle := lipgloss.NewStyle().Bold(true)

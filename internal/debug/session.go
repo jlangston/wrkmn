@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -88,6 +90,15 @@ func (s *Session) Disconnect() {
 	if s.conn != nil {
 		s.conn.Close()
 	}
+
+	// Clean up pending response channels to unblock any waiting callers
+	s.pendingMu.Lock()
+	for id, ch := range s.pending {
+		close(ch)
+		delete(s.pending, id)
+	}
+	s.pendingMu.Unlock()
+
 	s.state.SetState(StateDisconnected)
 }
 
@@ -150,7 +161,11 @@ func (s *Session) Call(method string, params map[string]any) (json.RawMessage, e
 
 	// Wait for response
 	select {
-	case resp := <-respChan:
+	case resp, ok := <-respChan:
+		if !ok {
+			// Channel was closed (session disconnected)
+			return nil, fmt.Errorf("session disconnected")
+		}
 		if resp.Error != nil {
 			return nil, resp.Error
 		}
@@ -162,19 +177,39 @@ func (s *Session) Call(method string, params map[string]any) (json.RawMessage, e
 
 // receiveMessages handles incoming WebSocket messages
 func (s *Session) receiveMessages() {
+	const readTimeout = 5 * time.Second
+
 	for {
+		// Check context before reading
 		select {
 		case <-s.ctx.Done():
 			return
 		default:
 		}
 
+		// Set read deadline to allow periodic context checks
+		s.conn.SetReadDeadline(time.Now().Add(readTimeout))
+
 		var msg CDPMessage
 		if err := s.conn.ReadJSON(&msg); err != nil {
+			// Check if context was cancelled
+			select {
+			case <-s.ctx.Done():
+				return
+			default:
+			}
+
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				return
 			}
-			// Log error and continue
+
+			// Check for timeout (expected when no messages)
+			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+				continue
+			}
+
+			// Log unexpected errors and continue
+			log.Printf("debug session read error: %v", err)
 			continue
 		}
 
@@ -182,7 +217,11 @@ func (s *Session) receiveMessages() {
 		if msg.ID > 0 {
 			s.pendingMu.Lock()
 			if ch, ok := s.pending[msg.ID]; ok {
-				ch <- &msg
+				select {
+				case ch <- &msg:
+				default:
+					// Channel already has a message or was closed
+				}
 			}
 			s.pendingMu.Unlock()
 			continue
@@ -266,7 +305,8 @@ func (s *Session) sendEvent(eventType string, data any) {
 	select {
 	case s.events <- DebugEvent{Type: eventType, Data: data}:
 	default:
-		// Channel full, drop event
+		// Channel full, log warning about dropped event
+		log.Printf("warning: debug event channel full, dropping event: %s", eventType)
 	}
 }
 

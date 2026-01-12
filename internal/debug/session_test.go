@@ -1,0 +1,221 @@
+package debug
+
+import (
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestSession_NewSession(t *testing.T) {
+	s := NewSession()
+	assert.NotNil(t, s)
+	assert.NotNil(t, s.state)
+	assert.NotNil(t, s.pending)
+	assert.NotNil(t, s.events)
+	assert.NotNil(t, s.ctx)
+	assert.NotNil(t, s.cancel)
+}
+
+func TestSession_Disconnect_CleansPendingChannels(t *testing.T) {
+	s := NewSession()
+
+	// Simulate pending channels
+	ch1 := make(chan *CDPMessage, 1)
+	ch2 := make(chan *CDPMessage, 1)
+	ch3 := make(chan *CDPMessage, 1)
+
+	s.pendingMu.Lock()
+	s.pending[1] = ch1
+	s.pending[2] = ch2
+	s.pending[3] = ch3
+	s.pendingMu.Unlock()
+
+	// Disconnect should close all pending channels
+	s.Disconnect()
+
+	// Verify channels are closed (reads return immediately with zero value)
+	select {
+	case _, ok := <-ch1:
+		assert.False(t, ok, "channel 1 should be closed")
+	default:
+		t.Error("channel 1 should be readable (and closed)")
+	}
+
+	select {
+	case _, ok := <-ch2:
+		assert.False(t, ok, "channel 2 should be closed")
+	default:
+		t.Error("channel 2 should be readable (and closed)")
+	}
+
+	select {
+	case _, ok := <-ch3:
+		assert.False(t, ok, "channel 3 should be closed")
+	default:
+		t.Error("channel 3 should be readable (and closed)")
+	}
+
+	// Pending map should be empty
+	s.pendingMu.Lock()
+	assert.Empty(t, s.pending)
+	s.pendingMu.Unlock()
+}
+
+func TestSession_Disconnect_MultipleCalls(t *testing.T) {
+	s := NewSession()
+
+	// Multiple disconnect calls should not panic
+	assert.NotPanics(t, func() {
+		s.Disconnect()
+		s.Disconnect()
+		s.Disconnect()
+	})
+}
+
+func TestSession_PendingMap_ThreadSafe(t *testing.T) {
+	s := NewSession()
+
+	var wg sync.WaitGroup
+	numGoroutines := 50
+	opsPerGoroutine := 100
+
+	// Concurrent access to pending map
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < opsPerGoroutine; j++ {
+				msgID := int64(id*1000 + j)
+
+				// Add pending
+				s.pendingMu.Lock()
+				s.pending[msgID] = make(chan *CDPMessage, 1)
+				s.pendingMu.Unlock()
+
+				// Check pending
+				s.pendingMu.Lock()
+				_, exists := s.pending[msgID]
+				s.pendingMu.Unlock()
+				_ = exists
+
+				// Remove pending
+				s.pendingMu.Lock()
+				delete(s.pending, msgID)
+				s.pendingMu.Unlock()
+			}
+		}(i)
+	}
+
+	// Should not race or panic
+	assert.NotPanics(t, func() {
+		wg.Wait()
+	})
+}
+
+func TestSession_Events_NonBlocking(t *testing.T) {
+	s := NewSession()
+
+	// Fill the event buffer (100 events)
+	for i := 0; i < 100; i++ {
+		s.sendEvent("test", i)
+	}
+
+	// Additional sends should not block (they get dropped with warning)
+	done := make(chan bool)
+	go func() {
+		s.sendEvent("overflow", nil)
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		// Good, didn't block
+	case <-time.After(100 * time.Millisecond):
+		t.Error("sendEvent blocked when channel full")
+	}
+}
+
+func TestSession_State(t *testing.T) {
+	s := NewSession()
+
+	state := s.State()
+	assert.NotNil(t, state)
+	assert.Equal(t, StateDisconnected, state.GetState())
+}
+
+func TestSession_EventsChannel(t *testing.T) {
+	s := NewSession()
+
+	events := s.Events()
+	assert.NotNil(t, events)
+
+	// Send an event
+	s.sendEvent(EventPaused, nil)
+
+	// Should receive it
+	select {
+	case event := <-events:
+		assert.Equal(t, EventPaused, event.Type)
+	case <-time.After(100 * time.Millisecond):
+		t.Error("event not received")
+	}
+}
+
+func TestSessionState_ThreadSafe(t *testing.T) {
+	state := NewSessionState()
+
+	var wg sync.WaitGroup
+
+	// Concurrent state changes
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				state.SetState(StateRunning)
+				state.GetState()
+				state.SetState(StatePaused)
+				state.GetState()
+			}
+		}()
+	}
+
+	// Concurrent script access
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				state.AddScript(&Script{ID: "script-" + string(rune(id))})
+				state.GetAllScripts()
+			}
+		}(i)
+	}
+
+	// Should not race or panic
+	assert.NotPanics(t, func() {
+		wg.Wait()
+	})
+}
+
+func TestSessionState_GetAllScripts_ReturnsCopy(t *testing.T) {
+	state := NewSessionState()
+
+	// Add some scripts
+	state.AddScript(&Script{ID: "1", URL: "a.js"})
+	state.AddScript(&Script{ID: "2", URL: "b.js"})
+
+	// Get all scripts
+	scripts := state.GetAllScripts()
+	assert.Len(t, scripts, 2)
+
+	// Modifying the returned slice shouldn't affect the state
+	scripts[0] = nil
+	scripts = scripts[:1]
+
+	// Get again should still have 2 scripts
+	scripts2 := state.GetAllScripts()
+	assert.Len(t, scripts2, 2)
+}

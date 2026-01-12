@@ -217,7 +217,8 @@ func (m *SourceManager) FindScriptByPath(path string) *Script {
 		absPath = path
 	}
 
-	scripts := m.session.state.Scripts
+	// Use thread-safe method to get scripts
+	scripts := m.session.state.GetAllScripts()
 	for _, script := range scripts {
 		scriptPath := m.ResolveScriptPath(script.URL)
 		if scriptPath == absPath || script.URL == path {

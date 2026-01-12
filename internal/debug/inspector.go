@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -112,6 +113,7 @@ func (d *InspectorDiscovery) IsAvailable() bool {
 
 // PortAllocator manages inspector port allocation
 type PortAllocator struct {
+	mu        sync.RWMutex
 	basePort  int
 	allocated map[string]int // process name -> port
 }
@@ -126,6 +128,9 @@ func NewPortAllocator(basePort int) *PortAllocator {
 
 // Allocate allocates a port for a process
 func (a *PortAllocator) Allocate(name string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if port, ok := a.allocated[name]; ok {
 		return port
 	}
@@ -137,17 +142,26 @@ func (a *PortAllocator) Allocate(name string) int {
 
 // GetPort returns the allocated port for a process
 func (a *PortAllocator) GetPort(name string) (int, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	port, ok := a.allocated[name]
 	return port, ok
 }
 
 // Release releases the port for a process
 func (a *PortAllocator) Release(name string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	delete(a.allocated, name)
 }
 
 // GetAll returns all allocated ports
 func (a *PortAllocator) GetAll() map[string]int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	result := make(map[string]int)
 	for k, v := range a.allocated {
 		result[k] = v

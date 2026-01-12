@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -295,7 +296,7 @@ func TestHealthMonitor_DoCheck(t *testing.T) {
 		monitor.doCheck(context.Background())
 
 		assert.Equal(t, HealthHealthy, graph.GetNode("api").Health)
-		assert.Equal(t, 0, monitor.failCount)
+		assert.Equal(t, int32(0), monitor.failCount.Load())
 	})
 
 	t.Run("increments fail count on failed check", func(t *testing.T) {
@@ -320,17 +321,17 @@ func TestHealthMonitor_DoCheck(t *testing.T) {
 
 		// First failure
 		monitor.doCheck(context.Background())
-		assert.Equal(t, 1, monitor.failCount)
+		assert.Equal(t, int32(1), monitor.failCount.Load())
 		assert.NotEqual(t, HealthUnhealthy, graph.GetNode("api").Health)
 
 		// Second failure
 		monitor.doCheck(context.Background())
-		assert.Equal(t, 2, monitor.failCount)
+		assert.Equal(t, int32(2), monitor.failCount.Load())
 		assert.NotEqual(t, HealthUnhealthy, graph.GetNode("api").Health)
 
 		// Third failure - should mark unhealthy
 		monitor.doCheck(context.Background())
-		assert.Equal(t, 3, monitor.failCount)
+		assert.Equal(t, int32(3), monitor.failCount.Load())
 		assert.Equal(t, HealthUnhealthy, graph.GetNode("api").Health)
 	})
 
@@ -362,11 +363,11 @@ func TestHealthMonitor_DoCheck(t *testing.T) {
 		// Two failures
 		monitor.doCheck(context.Background())
 		monitor.doCheck(context.Background())
-		assert.Equal(t, 2, monitor.failCount)
+		assert.Equal(t, int32(2), monitor.failCount.Load())
 
 		// Recovery
 		monitor.doCheck(context.Background())
-		assert.Equal(t, 0, monitor.failCount)
+		assert.Equal(t, int32(0), monitor.failCount.Load())
 		assert.Equal(t, HealthHealthy, graph.GetNode("api").Health)
 	})
 
@@ -393,7 +394,7 @@ func TestHealthMonitor_DoCheck(t *testing.T) {
 		monitor.doCheck(context.Background())
 
 		// Should not increment fail count during startup
-		assert.Equal(t, 0, monitor.failCount)
+		assert.Equal(t, int32(0), monitor.failCount.Load())
 	})
 }
 
@@ -468,4 +469,73 @@ func TestCheckResult(t *testing.T) {
 	assert.True(t, result.Healthy)
 	assert.Equal(t, "OK", result.Message)
 	assert.Equal(t, 50*time.Millisecond, result.Latency)
+}
+
+// Bug fix tests
+
+func TestHealthMonitor_Stop_MultipleCalls(t *testing.T) {
+	// Test that Stop() can be called multiple times without panicking
+	// This was a bug fix - previously it would panic on double close
+	processes := map[string]config.Process{
+		"api": {Command: "npm"},
+	}
+	graph := NewDependencyGraph(processes)
+
+	hc := &config.HealthCheck{
+		Type:   config.HealthCheckHTTP,
+		Target: "http://localhost:3000",
+	}
+
+	monitor := NewHealthMonitor("api", hc, graph)
+
+	// Should not panic on multiple calls
+	assert.NotPanics(t, func() {
+		monitor.Stop()
+		monitor.Stop()
+		monitor.Stop()
+	})
+}
+
+func TestHealthMonitor_FailCount_ThreadSafe(t *testing.T) {
+	// Test that failCount operations are thread-safe
+	// This was a bug fix - failCount is now atomic
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Alternate between success and failure
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	processes := map[string]config.Process{
+		"api": {Command: "npm"},
+	}
+	graph := NewDependencyGraph(processes)
+
+	hc := &config.HealthCheck{
+		Type:    config.HealthCheckHTTP,
+		Target:  server.URL,
+		Retries: 100, // High retry count so we don't trigger unhealthy
+	}
+
+	monitor := NewHealthMonitor("api", hc, graph)
+	monitor.inStartup = false
+
+	// Run multiple concurrent doCheck calls
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				monitor.doCheck(context.Background())
+			}
+		}()
+	}
+
+	// Should not panic or have race conditions
+	assert.NotPanics(t, func() {
+		wg.Wait()
+	})
+
+	// Fail count should be consistent (100 total checks)
+	assert.Equal(t, int32(100), monitor.failCount.Load())
 }

@@ -386,6 +386,11 @@ func (v *ConsoleView) overlayAutocomplete(base string) string {
 	baseLines := strings.Split(base, "\n")
 	popupLines := strings.Split(popup, "\n")
 
+	// Safety check: if popup has no lines, return base
+	if len(popupLines) == 0 {
+		return base
+	}
+
 	// Position popup above the input line (last few lines of base)
 	// The input is near the bottom, so place popup just above it
 	popupY := len(baseLines) - len(popupLines) - 3 // 3 lines from bottom (input, separator, padding)
@@ -394,7 +399,13 @@ func (v *ConsoleView) overlayAutocomplete(base string) string {
 	}
 
 	popupX, _ := v.autocomplete.GetPosition()
-	popupX = min(popupX+2, v.width-lipgloss.Width(popupLines[0])-4) // Ensure it fits
+	// Calculate popup width safely
+	popupWidth := lipgloss.Width(popupLines[0])
+	maxX := v.width - popupWidth - 4
+	if maxX < 2 {
+		maxX = 2
+	}
+	popupX = min(popupX+2, maxX)
 	if popupX < 2 {
 		popupX = 2
 	}

@@ -230,6 +230,17 @@ func (s *SessionState) GetScriptByURL(url string) *Script {
 	return nil
 }
 
+// GetAllScripts returns all scripts
+func (s *SessionState) GetAllScripts() []*Script {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	scripts := make([]*Script, 0, len(s.Scripts))
+	for _, script := range s.Scripts {
+		scripts = append(scripts, script)
+	}
+	return scripts
+}
+
 // SetCallStack updates the call stack
 func (s *SessionState) SetCallStack(frames []CallFrame, reason PauseReason) {
 	s.mu.Lock()

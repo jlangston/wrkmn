@@ -55,7 +55,9 @@ func NewRemoteLogsView() *RemoteLogsView {
 // Init initializes the view with a worker and starts tailing
 func (r *RemoteLogsView) Init(w *worker.Worker) tea.Cmd {
 	r.worker = w
+	r.messagesMu.Lock()
 	r.messages = r.messages[:0]
+	r.messagesMu.Unlock()
 	r.scroll = 0
 	r.error = ""
 	r.connected = false
@@ -113,7 +115,9 @@ func (r *RemoteLogsView) connect() tea.Cmd {
 // reconnect stops the current session and reconnects
 func (r *RemoteLogsView) reconnect() {
 	r.disconnect()
+	r.messagesMu.Lock()
 	r.messages = r.messages[:0]
+	r.messagesMu.Unlock()
 	r.error = ""
 	// Note: reconnection will happen via Init or separate command
 }
@@ -214,6 +218,10 @@ func (r *RemoteLogsView) Update(msg tea.Msg) tea.Cmd {
 		if msg.err != nil {
 			r.error = msg.err.Error()
 		}
+
+	case remoteLogsTickMsg:
+		// Continue polling for messages (fixes bug where polling stopped after timeout)
+		return r.listenForMessages()
 	}
 
 	return nil

@@ -68,6 +68,7 @@ func (l *Loader) Load() (*Config, error) {
 	l.applyDefaults(&cfg)
 	l.resolveWorkingDirs(&cfg)
 
+	cfg.BaseDir = l.basePath
 	return &cfg, nil
 }
 
@@ -97,6 +98,7 @@ func defaultConfigForDir(dir string) *Config {
 			ScriptNames: []string{"dev", "start"},
 		},
 		Processes: make(map[string]Process),
+		BaseDir:   dir,
 	}
 }
 

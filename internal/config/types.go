@@ -11,6 +11,9 @@ type Config struct {
 	Processes map[string]Process `yaml:"processes"`
 	Defaults  ProcessDefaults    `yaml:"defaults,omitempty"`
 	UI        UIConfig           `yaml:"ui,omitempty"`
+
+	// BaseDir is the directory containing the config file (not from YAML)
+	BaseDir string `yaml:"-"`
 }
 
 // UIConfig configures the TUI appearance
@@ -34,6 +37,8 @@ type Process struct {
 	Command       string            `yaml:"command"`
 	Args          []string          `yaml:"args,omitempty"`
 	WorkingDir    string            `yaml:"working_dir,omitempty"`
+	EnvFile       string            `yaml:"env_file,omitempty"`
+	EnvFiles      []string          `yaml:"env_files,omitempty"`
 	Environment   map[string]string `yaml:"environment,omitempty"`
 	DependsOn     []Dependency      `yaml:"depends_on,omitempty"`
 	HealthCheck   *HealthCheck      `yaml:"health_check,omitempty"`
@@ -105,6 +110,7 @@ type RestartPolicy struct {
 
 // ProcessDefaults provides defaults applied to all processes
 type ProcessDefaults struct {
+	EnvFile     string            `yaml:"env_file,omitempty"`
 	Environment map[string]string `yaml:"environment,omitempty"`
 	HealthCheck *HealthCheck      `yaml:"health_check,omitempty"`
 	Restart     *RestartPolicy    `yaml:"restart,omitempty"`
