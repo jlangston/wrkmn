@@ -135,7 +135,7 @@ func (s *ScriptPopup) Update(msg tea.Msg) tea.Cmd {
 				s.outputMu.RLock()
 				s.scroll = max(0, len(s.output)-10)
 				s.outputMu.RUnlock()
-			} else {
+			} else if len(s.scripts) > 0 {
 				s.cursor = len(s.scripts) - 1
 			}
 

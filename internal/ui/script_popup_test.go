@@ -301,3 +301,27 @@ func TestScriptPopup_SortsScripts(t *testing.T) {
 
 	assert.Equal(t, []string{"alpha", "mango", "zebra"}, popup.scripts)
 }
+
+func TestScriptPopup_GoToBottom_EmptyScripts(t *testing.T) {
+	popup := NewScriptPopup()
+	w := &worker.Worker{
+		Name:    "test-worker",
+		Scripts: map[string]string{},
+	}
+	popup.Show(w)
+	popup.SetSize(80, 30)
+
+	// Verify scripts is empty
+	if len(popup.scripts) != 0 {
+		t.Errorf("Expected 0 scripts, got %d", len(popup.scripts))
+	}
+
+	// Press G to go to bottom - should not cause cursor to become -1
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}
+	popup.Update(msg)
+
+	// Cursor should stay at 0, not become -1
+	if popup.cursor != 0 {
+		t.Errorf("Expected cursor 0, got %d", popup.cursor)
+	}
+}
