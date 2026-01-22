@@ -298,20 +298,26 @@ func (s *ScriptPopup) View() string {
 	overlayHeight := min(30, s.height-4)
 	contentHeight := overlayHeight - 6 // Account for borders, header, footer
 
+	// Popups always need an opaque background, regardless of transparency setting
+	// Use the theme's Background directly (not BgColor which returns NoColor in transparent mode)
+	popupBg := t.Background
+
 	var content string
 	var footer string
 
 	if s.running {
 		// Show output
-		content = s.renderOutput(overlayWidth-4, contentHeight)
+		content = s.renderOutput(overlayWidth-4, contentHeight, popupBg)
 		footer = lipgloss.NewStyle().
 			Foreground(t.Secondary).
+			Background(popupBg).
 			Render("Ctrl+C: stop • j/k: scroll • q: close")
 	} else {
 		// Show script list
-		content = s.renderScriptList(overlayWidth-4, contentHeight)
+		content = s.renderScriptList(overlayWidth-4, contentHeight, popupBg)
 		footer = lipgloss.NewStyle().
 			Foreground(t.Secondary).
+			Background(popupBg).
 			Render("Enter: run • j/k: navigate • q: close")
 	}
 
@@ -322,17 +328,18 @@ func (s *ScriptPopup) View() string {
 	}
 	header := lipgloss.NewStyle().
 		Foreground(t.Primary).
+		Background(popupBg).
 		Bold(true).
 		Render(fmt.Sprintf("Scripts • %s", workerName))
 
-	// Overlay style
+	// Overlay style - always use opaque background for popups
 	overlayStyle := lipgloss.NewStyle().
 		Width(overlayWidth).
 		Height(overlayHeight).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.BorderFocused).
 		Padding(1, 2).
-		Background(t.Background)
+		Background(popupBg)
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -345,10 +352,11 @@ func (s *ScriptPopup) View() string {
 	return overlayStyle.Render(body)
 }
 
-func (s *ScriptPopup) renderScriptList(width, height int) string {
+func (s *ScriptPopup) renderScriptList(width, height int, bg lipgloss.TerminalColor) string {
 	if len(s.scripts) == 0 {
 		return lipgloss.NewStyle().
 			Foreground(theme.Current.Secondary).
+			Background(bg).
 			Render("No scripts found in package.json")
 	}
 
@@ -363,6 +371,7 @@ func (s *ScriptPopup) renderScriptList(width, height int) string {
 
 	normalStyle := lipgloss.NewStyle().
 		Foreground(t.Foreground).
+		Background(bg).
 		Width(width)
 
 	for i, script := range s.scripts {
@@ -382,13 +391,14 @@ func (s *ScriptPopup) renderScriptList(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (s *ScriptPopup) renderOutput(width, height int) string {
+func (s *ScriptPopup) renderOutput(width, height int, bg lipgloss.TerminalColor) string {
 	s.outputMu.RLock()
 	defer s.outputMu.RUnlock()
 
 	if len(s.output) == 0 {
 		return lipgloss.NewStyle().
 			Foreground(theme.Current.Secondary).
+			Background(bg).
 			Render("Waiting for output...")
 	}
 
@@ -404,13 +414,19 @@ func (s *ScriptPopup) renderOutput(width, height int) string {
 
 	visible := s.output[start:end]
 
+	// Style for output lines
+	lineStyle := lipgloss.NewStyle().
+		Foreground(theme.Current.Foreground).
+		Background(bg).
+		Width(width)
+
 	// Truncate long lines
 	var lines []string
 	for _, line := range visible {
 		if len(line) > width {
 			line = line[:width-3] + "..."
 		}
-		lines = append(lines, line)
+		lines = append(lines, lineStyle.Render(line))
 	}
 
 	return strings.Join(lines, "\n")
