@@ -74,10 +74,24 @@ Manager wiring (`internal/process/manager.go`):
      existing wins.
   3. Merge file values (in declared order) on top of the OS env.
   4. Overlay the inline `Environment` map last (inline always wins).
-- If a declared `env_file` cannot be found/read, `StartProcess` returns an error
-  (the process does not start with a silently missing environment).
-- Defaults' `env_file` is applied when a process does not set its own (existing
-  `applyDefaults` already copies the string; loading now honors it).
+- **Missing-file severity depends on provenance** (verified necessary against
+  the target project: `defaults.env_file: .dev.vars` applies to all processes,
+  but `postgres`, `db-setup`, `stretch-mcp`, `stretch-player` have no
+  `.dev.vars` in their working dir):
+  - An **explicitly set** per-process `env_file`/`env_files` that cannot be
+    resolved → `StartProcess` returns an error (the process does not start with
+    a silently missing environment it explicitly asked for).
+  - An env file **inherited from `defaults`** that cannot be resolved → skipped
+    silently (best-effort); the process starts. (For `stretch-mcp`/`player` the
+    root `.dev.vars` still resolves via the BaseDir fallback, so they get the
+    shared vars anyway; only the truly-absent case is skipped.)
+- Provenance tracking: `applyDefaults` currently overwrites `Process.EnvFile`
+  with the default string, erasing the distinction. The loader will instead set
+  a non-YAML field `Process.envFileFromDefault bool` (or equivalent: only fill
+  `EnvFile`/`EnvFiles` from defaults when the process left them empty *and*
+  record that it was defaulted). The manager reads this flag to choose error
+  vs. skip. Pre-flight (Component 5) applies the same rule: explicit missing =
+  error, defaulted missing = warning.
 
 This package is pure and unit-tested with table tests (quoting, comments,
 export prefix, override order, missing file).
@@ -179,8 +193,9 @@ Checks:
 
 - Command resolvable on `PATH` (`exec.LookPath`) — error if not.
 - `working_dir` exists and is a directory — error if not.
-- Each declared `env_file`/`env_files` exists and is readable — error if a
-  declared file is missing (matches Component 1's hard-fail).
+- Each `env_file`/`env_files` resolves and is readable, using the same
+  provenance rule as Component 1: an unresolved **explicit** env file is an
+  error; an unresolved **defaulted** env file is a warning.
 - `inspector_port` (worker type) not already bound (short TCP dial) — warning.
 - Duplicate `inspector_port` across processes — error.
 
