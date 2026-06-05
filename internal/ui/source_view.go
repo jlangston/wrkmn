@@ -13,9 +13,9 @@ import (
 
 // SourceView displays source code with breakpoint gutter
 type SourceView struct {
-	source       *debug.SourceManager
-	session      *debug.Session
-	breakpoints  *debug.BreakpointManager
+	source      *debug.SourceManager
+	session     *debug.Session
+	breakpoints *debug.BreakpointManager
 
 	// Current state
 	scriptID     string
@@ -156,8 +156,8 @@ func (v *SourceView) Update(msg tea.Msg) tea.Cmd {
 				v.cursorLine = 0
 			}
 			v.scrollToLine(v.cursorLine)
-		case "F9", "b":
-			// Toggle breakpoint at cursor line
+		case "f9", "b":
+			// Toggle breakpoint at cursor line (Bubble Tea reports F9 as "f9")
 			return v.toggleBreakpoint()
 		}
 	}

@@ -48,6 +48,26 @@ func TestParse(t *testing.T) {
 	assert.Equal(t, "src/index.ts", config.Main)
 }
 
+func TestParse_DevPort(t *testing.T) {
+	const tomlWithDevPort = `
+name = "my-worker"
+
+[dev]
+port = 8787
+`
+	config, err := Parse([]byte(tomlWithDevPort))
+	require.NoError(t, err)
+
+	assert.Equal(t, 8787, config.Dev.Port)
+}
+
+func TestParse_NoDevBlock(t *testing.T) {
+	config, err := Parse([]byte(minimalWranglerToml))
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, config.Dev.Port)
+}
+
 func TestParse_MinimalConfig(t *testing.T) {
 	config, err := Parse([]byte(minimalWranglerToml))
 	require.NoError(t, err)

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"wrkmn/internal/config"
+	"wrkmn/internal/debug"
 	"wrkmn/internal/process"
 	"wrkmn/internal/worker"
 )
@@ -27,6 +28,9 @@ type TableModel struct {
 	scriptPopup    *ScriptPopup
 	remoteLogsView *RemoteLogsView
 	envSelector    *EnvSelector
+	debugView      *DebugView
+	debugSession   *debug.Session
+	statusMsg      string
 }
 
 var (
@@ -91,6 +95,9 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scriptPopup.SetSize(msg.Width, msg.Height)
 		m.remoteLogsView.SetSize(msg.Width, msg.Height)
 		m.envSelector.SetSize(msg.Width, msg.Height)
+		if m.debugView != nil {
+			m.debugView.SetSize(msg.Width, msg.Height)
+		}
 		// Force a redraw after resize
 		if m.currentView == ViewLogs {
 			return m, m.logView.TickCmd()
@@ -134,6 +141,19 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case debugConnectedMsg:
+		return m.onDebugConnected(msg)
+
+	case debugEventMsg:
+		return m.onDebugEvent(msg)
+
+	case debugClosedMsg:
+		// Session ended (disconnect or worker exit) — return to the dashboard.
+		if m.currentView == ViewDebug {
+			return m.exitDebug(), nil
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		// Handle env selector first if visible
 		if m.envSelector.Visible() {
@@ -152,6 +172,9 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.currentView == ViewRemoteLogs {
 			return m.handleRemoteLogsViewKeys(msg)
+		}
+		if m.currentView == ViewDebug {
+			return m.handleDebugViewKeys(msg)
 		}
 		return m.handleTableKeys(msg)
 	}
@@ -196,6 +219,9 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
 		return m.startWorker("dev")
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("D"))):
+		return m.enterDebug()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
 		return m.showScriptPopup()
@@ -446,6 +472,10 @@ func (m TableModel) View() string {
 		return m.remoteLogsView.View()
 	}
 
+	if m.currentView == ViewDebug && m.debugView != nil {
+		return m.debugView.View()
+	}
+
 	tableView := m.renderTable()
 
 	// Overlay env selector if visible
@@ -554,15 +584,18 @@ func (m TableModel) renderTable() string {
 	helpText := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		Padding(0, 1).
-		Render("j/k: navigate • d: dev • s: scripts • r: remote logs • e: env • x: stop • a: all • l: logs • q: quit")
+		Render("j/k: navigate • d: dev • D: debug • s: scripts • r: remote logs • e: env • x: stop • a: all • l: logs • q: quit")
 
 	// Add main container with border
-	mainContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		table,
-		"",
-		helpText,
-	)
+	rows := []string{table, "", helpText}
+	if m.statusMsg != "" {
+		statusLine := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")).
+			Padding(0, 1).
+			Render(m.statusMsg)
+		rows = append(rows, statusLine)
+	}
+	mainContent := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
 	containerStyle := lipgloss.NewStyle().
 		MaxWidth(m.width).

@@ -90,8 +90,9 @@ func defaultHelpSections() []HelpSection {
 				{"F9", "Toggle breakpoint"},
 				{"F10", "Step over"},
 				{"F11", "Step into"},
-				{"S-F11", "Step out"},
+				{"F12", "Step out"},
 				{"Tab", "Switch panel"},
+				{"Esc", "Exit debugger"},
 			},
 		},
 	}

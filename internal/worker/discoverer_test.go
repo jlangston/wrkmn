@@ -42,6 +42,42 @@ func TestDiscoverer_DiscoverWorkers(t *testing.T) {
 		assert.Equal(t, StatusStopped, workers[0].Status)
 	})
 
+	t.Run("falls back to [dev] port in wrangler.toml when dev script has no --port", func(t *testing.T) {
+		dir := t.TempDir()
+		workerDir := filepath.Join(dir, "platform")
+		require.NoError(t, os.Mkdir(workerDir, 0755))
+
+		pkg := `{"name": "platform", "scripts": {"dev": "wrangler dev --env development"}}`
+		require.NoError(t, os.WriteFile(filepath.Join(workerDir, "package.json"), []byte(pkg), 0644))
+		toml := "name = \"platform\"\n\n[dev]\nport = 8787\n"
+		require.NoError(t, os.WriteFile(filepath.Join(workerDir, "wrangler.toml"), []byte(toml), 0644))
+
+		d := NewDiscoverer()
+		workers, err := d.DiscoverWorkers(dir)
+
+		require.NoError(t, err)
+		require.Len(t, workers, 1)
+		assert.Equal(t, 8787, workers[0].Port)
+	})
+
+	t.Run("--port flag in dev script wins over [dev] port", func(t *testing.T) {
+		dir := t.TempDir()
+		workerDir := filepath.Join(dir, "api")
+		require.NoError(t, os.Mkdir(workerDir, 0755))
+
+		pkg := `{"name": "api", "scripts": {"dev": "wrangler dev --port 8788 --env development"}}`
+		require.NoError(t, os.WriteFile(filepath.Join(workerDir, "package.json"), []byte(pkg), 0644))
+		toml := "name = \"api\"\n\n[dev]\nport = 9999\n"
+		require.NoError(t, os.WriteFile(filepath.Join(workerDir, "wrangler.toml"), []byte(toml), 0644))
+
+		d := NewDiscoverer()
+		workers, err := d.DiscoverWorkers(dir)
+
+		require.NoError(t, err)
+		require.Len(t, workers, 1)
+		assert.Equal(t, 8788, workers[0].Port)
+	})
+
 	t.Run("skips non-wrangler projects", func(t *testing.T) {
 		dir := t.TempDir()
 		projectDir := filepath.Join(dir, "regular-project")

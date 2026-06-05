@@ -23,10 +23,10 @@ var (
 	BuildDate = "unknown"
 
 	// CLI flags
-	cfgFile       string
-	themeName     string
-	transparent   bool
-	noDiscovery   bool
+	cfgFile     string
+	themeName   string
+	transparent bool
+	noDiscovery bool
 )
 
 // rootCmd represents the base command
@@ -116,14 +116,19 @@ func runApp(cmd *cobra.Command, args []string) {
 
 	for name, proc := range cfg.Processes {
 		w := &worker.Worker{
-			Name:   name,
-			Path:   proc.WorkingDir,
-			Status: worker.StatusStopped,
-			Port:   proc.InspectorPort,
+			Name:          name,
+			Path:          proc.WorkingDir,
+			Status:        worker.StatusStopped,
+			InspectorPort: proc.InspectorPort,
 			Scripts: map[string]string{
 				"_config": proc.Command, // Special marker for config-based processes
 			},
 		}
+		// Populate the real serving Port (and env/cloudflare metadata) from the
+		// process's wrangler.toml [dev] block. Previously Port was set to the
+		// inspector port, so the UI showed 9229+ instead of the port wrangler
+		// actually serves on (e.g. 8787). No-op for non-worker services.
+		worker.EnrichFromWranglerConfig(w)
 		workers = append(workers, w)
 		configWorkerNames[name] = true
 	}

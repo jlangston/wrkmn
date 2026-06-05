@@ -14,9 +14,9 @@ import (
 
 // CDPMessage represents a Chrome DevTools Protocol message
 type CDPMessage struct {
-	ID     int64          `json:"id,omitempty"`
-	Method string         `json:"method,omitempty"`
-	Params map[string]any `json:"params,omitempty"`
+	ID     int64           `json:"id,omitempty"`
+	Method string          `json:"method,omitempty"`
+	Params map[string]any  `json:"params,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  *CDPError       `json:"error,omitempty"`
 }
@@ -33,15 +33,15 @@ func (e *CDPError) Error() string {
 
 // Session represents a debug session with a V8 inspector
 type Session struct {
-	conn       *websocket.Conn
-	state      *SessionState
-	msgID      int64
-	pending    map[int64]chan *CDPMessage
-	pendingMu  sync.Mutex
-	events     chan DebugEvent
-	ctx        context.Context
-	cancel     context.CancelFunc
-	target     *InspectorTarget
+	conn      *websocket.Conn
+	state     *SessionState
+	msgID     int64
+	pending   map[int64]chan *CDPMessage
+	pendingMu sync.Mutex
+	events    chan DebugEvent
+	ctx       context.Context
+	cancel    context.CancelFunc
+	target    *InspectorTarget
 }
 
 // NewSession creates a new debug session
@@ -110,6 +110,13 @@ func (s *Session) State() *SessionState {
 // Events returns the event channel
 func (s *Session) Events() <-chan DebugEvent {
 	return s.events
+}
+
+// Done returns a channel that is closed when the session is disconnected.
+// Consumers reading from Events() should also select on Done() so they unblock
+// when the session shuts down instead of leaking a goroutine.
+func (s *Session) Done() <-chan struct{} {
+	return s.ctx.Done()
 }
 
 // enableDomains enables required CDP domains

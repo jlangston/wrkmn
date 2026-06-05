@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -15,14 +16,27 @@ import (
 	"wrkmn/internal/worker"
 )
 
+// appendInspectorFlag appends a wrangler `--inspector-port <port>` flag to a
+// bun/npm `run <script>` invocation, using the `--` passthrough separator so the
+// flag reaches the underlying `wrangler dev` rather than bun/npm itself.
+//
+// Without this, every `wrangler dev` defaults its V8 inspector to port 9229, so
+// only the first worker in a multi-worker project gets a working inspector and
+// the rest collide. Assigning each worker its configured inspector_port lets the
+// in-TUI debugger (and external clients like VS Code) attach to any of them.
+func appendInspectorFlag(args []string, inspectorPort int) []string {
+	out := append([]string{}, args...)
+	return append(out, "--", "--inspector-port", strconv.Itoa(inspectorPort))
+}
+
 type Manager struct {
 	processes map[string]*Process
 	mu        sync.RWMutex
 }
 
 type Process struct {
-	Name      string         // Process name (from config or worker name)
-	Worker    *worker.Worker // nil for non-worker processes
+	Name      string          // Process name (from config or worker name)
+	Worker    *worker.Worker  // nil for non-worker processes
 	Config    *config.Process // nil for legacy worker-only processes
 	Cmd       *exec.Cmd
 	Cancel    context.CancelFunc
@@ -145,7 +159,11 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	cmd := exec.CommandContext(ctx, "bun", "run", script)
+	runArgs := []string{"run", script}
+	if w.InspectorPort > 0 {
+		runArgs = appendInspectorFlag(runArgs, w.InspectorPort)
+	}
+	cmd := exec.CommandContext(ctx, "bun", runArgs...)
 	cmd.Dir = w.Path
 	// Set process group to handle signals properly
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -324,10 +342,15 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 
 	ctx, cancel := context.WithCancel(ctx)
 
-	// Build command with args
+	// Build command with args. For worker processes that declare an inspector
+	// port, forward it to wrangler so its V8 inspector binds a distinct port.
+	args := cfg.Args
+	if cfg.Type == config.ProcessTypeWorker && cfg.InspectorPort > 0 {
+		args = appendInspectorFlag(args, cfg.InspectorPort)
+	}
 	var cmd *exec.Cmd
-	if len(cfg.Args) > 0 {
-		cmd = exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+	if len(args) > 0 {
+		cmd = exec.CommandContext(ctx, cfg.Command, args...)
 	} else {
 		cmd = exec.CommandContext(ctx, cfg.Command)
 	}

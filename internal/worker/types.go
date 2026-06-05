@@ -12,8 +12,11 @@ type Worker struct {
 	PackageJSON *PackageJSON      `json:"package_json"`
 	Scripts     map[string]string `json:"scripts"`
 	Port        int               `json:"port"`
-	Status      WorkerStatus      `json:"status"`
-	LastUpdated time.Time         `json:"last_updated"`
+	// InspectorPort is the V8 inspector / debugger port (wrangler --inspector-port).
+	// Distinct from Port (the HTTP serving port). 0 if not configured.
+	InspectorPort int          `json:"inspector_port,omitempty"`
+	Status        WorkerStatus `json:"status"`
+	LastUpdated   time.Time    `json:"last_updated"`
 
 	// Wrangler configuration (parsed from wrangler.toml)
 	WranglerConfig *wrangler.Config `json:"-"`

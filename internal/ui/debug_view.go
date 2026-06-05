@@ -41,9 +41,9 @@ type DebugView struct {
 	height      int
 
 	// Status
-	isPaused    bool
-	statusMsg   string
-	workerName  string
+	isPaused   bool
+	statusMsg  string
+	workerName string
 }
 
 // NewDebugView creates a new debug view
@@ -159,6 +159,9 @@ func (v *DebugView) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		// Handle global debug keys first
+		// Bubble Tea reports function keys lowercase ("f5", "f11", ...). Shifted
+		// function keys are not reliably delivered across terminals, so step-out
+		// also accepts shift+f11 where available.
 		switch msg.String() {
 		case "tab":
 			v.NextPanel()
@@ -166,18 +169,18 @@ func (v *DebugView) Update(msg tea.Msg) tea.Cmd {
 		case "shift+tab":
 			v.PrevPanel()
 			return nil
-		case "F5":
+		case "f5":
 			return v.handleContinue()
-		case "F9":
+		case "f9":
 			// Toggle breakpoint (handled by source view if focused)
 			if v.activePanel == PanelSource {
 				return v.sourceView.Update(msg)
 			}
-		case "F10":
+		case "f10":
 			return v.handleStepOver()
-		case "F11":
+		case "f11":
 			return v.handleStepInto()
-		case "shift+F11":
+		case "shift+f11", "f12":
 			return v.handleStepOut()
 		}
 
@@ -410,9 +413,11 @@ func (v *DebugView) renderStatusBar() string {
 	rightParts := []string{
 		keyStyle.Render("[F5]") + mutedStyle.Render("Continue"),
 		keyStyle.Render("[F9]") + mutedStyle.Render("Breakpoint"),
-		keyStyle.Render("[F10]") + mutedStyle.Render("Step"),
+		keyStyle.Render("[F10]") + mutedStyle.Render("Over"),
 		keyStyle.Render("[F11]") + mutedStyle.Render("Into"),
+		keyStyle.Render("[F12]") + mutedStyle.Render("Out"),
 		keyStyle.Render("[Tab]") + mutedStyle.Render("Panel"),
+		keyStyle.Render("[Esc]") + mutedStyle.Render("Exit"),
 	}
 	right := strings.Join(rightParts, " ")
 

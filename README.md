@@ -121,12 +121,15 @@ defaults:
 | Key | Action |
 |-----|--------|
 | `j/k` | Navigate up/down |
-| `Enter` | Start/stop selected process |
-| `l` | View logs |
-| `d` | Enter debug mode (workers only) |
+| `Enter` / `l` | View logs |
+| `d` | Start (dev) |
+| `D` | Enter debug mode (running CF Workers only) |
+| `s` | Run a script |
+| `r` | Remote logs (CF Workers) |
+| `e` | Select environment |
+| `x` | Stop process |
 | `a` | Start all |
-| `x` | Stop all |
-| `r` | Refresh |
+| `z` | Stop all |
 | `?` | Help |
 | `q` | Quit |
 
@@ -171,13 +174,15 @@ defaults:
 
 wrkmn includes a full CDP-based debugger for Cloudflare Workers:
 
-1. Ensure your worker has an `inspector_port` configured (default: 9229)
-2. Start the worker
-3. Press `d` to enter debug mode
-4. Set breakpoints with `F9` or `b`
-5. Use stepping controls to navigate through code
-6. Inspect variables in the variables panel
-7. Evaluate expressions in the REPL console
+1. Give each worker a distinct `inspector_port` in `worker-compose.yaml` (default wrangler port is 9229). wrkmn forwards this to `wrangler dev --inspector-port`, so multiple workers can be debugged at once without colliding.
+2. Start the worker (`d`) — it must be running to attach.
+3. Select it and press `D` to attach the debugger.
+4. Set breakpoints with `F9`, step with `F10` (over) / `F11` (into) / `F12` (out), continue with `F5`.
+5. `Tab` cycles panels (source / call stack / variables / console).
+6. Inspect variables in the variables panel and evaluate expressions in the REPL console.
+7. Press `Esc` (from any panel except the console) to detach and return to the dashboard.
+
+The inspector is a standard CDP endpoint, so you can also attach external clients (Chrome DevTools, VS Code) to the same `inspector_port`.
 
 ## Themes
 

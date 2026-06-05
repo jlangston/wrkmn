@@ -92,8 +92,19 @@ func (d *Discoverer) parseWorkerFromPackageJSON(packageJSONPath string) (*Worker
 	return worker, nil
 }
 
-// parseWranglerConfig loads and parses wrangler.toml for a worker
+// parseWranglerConfig loads and parses wrangler.toml for a worker.
 func (d *Discoverer) parseWranglerConfig(w *Worker) {
+	EnrichFromWranglerConfig(w)
+}
+
+// EnrichFromWranglerConfig loads wrangler.toml from the worker's Path and
+// populates WranglerConfig, name, account ID, environments, and (when not
+// already set from a --port flag) the serving Port from the [dev] block.
+//
+// It is safe to call for workers without a wrangler.toml (e.g. plain services
+// or config-defined processes whose working dir isn't a worker) — it returns
+// without modifying the worker in that case.
+func EnrichFromWranglerConfig(w *Worker) {
 	if !wrangler.Exists(w.Path) {
 		return
 	}
@@ -110,6 +121,14 @@ func (d *Discoverer) parseWranglerConfig(w *Worker) {
 	// Use name from wrangler.toml if available
 	if config.Name != "" {
 		w.Name = config.Name
+	}
+
+	// Port precedence mirrors wrangler itself: a --port flag in the dev script
+	// wins, otherwise fall back to the [dev] port in wrangler.toml. Without this
+	// fallback, workers that rely on [dev].port (no --port flag) show port 0 in
+	// the UI even though wrangler starts them on the configured port.
+	if w.Port == 0 && config.Dev.Port != 0 {
+		w.Port = config.Dev.Port
 	}
 
 	// Set account ID from root config

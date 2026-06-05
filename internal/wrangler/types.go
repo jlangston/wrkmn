@@ -2,22 +2,32 @@ package wrangler
 
 // Config represents a wrangler.toml configuration file
 type Config struct {
-	Name               string                 `toml:"name"`
-	AccountID          string                 `toml:"account_id"`
-	CompatibilityDate  string                 `toml:"compatibility_date"`
-	CompatibilityFlags []string               `toml:"compatibility_flags"`
-	Main               string                 `toml:"main"`
+	Name               string   `toml:"name"`
+	AccountID          string   `toml:"account_id"`
+	CompatibilityDate  string   `toml:"compatibility_date"`
+	CompatibilityFlags []string `toml:"compatibility_flags"`
+	Main               string   `toml:"main"`
 
 	// Environment-specific configurations
 	Env map[string]Environment `toml:"env"`
 
 	// Other common fields
-	Workers    WorkersConfig  `toml:"workers"`
-	Vars       map[string]any `toml:"vars"`
-	Routes     []Route        `toml:"routes"`
-	Route      string         `toml:"route"`
-	Triggers   Triggers       `toml:"triggers"`
-	Build      BuildConfig    `toml:"build"`
+	Workers  WorkersConfig  `toml:"workers"`
+	Vars     map[string]any `toml:"vars"`
+	Routes   []Route        `toml:"routes"`
+	Route    string         `toml:"route"`
+	Triggers Triggers       `toml:"triggers"`
+	Build    BuildConfig    `toml:"build"`
+	Dev      DevConfig      `toml:"dev"`
+}
+
+// DevConfig represents the top-level [dev] block in wrangler.toml.
+// This is where `wrangler dev` reads its default port from when no
+// --port flag is passed on the command line.
+type DevConfig struct {
+	Port      int    `toml:"port"`
+	IP        string `toml:"ip"`
+	LocalPort int    `toml:"local_port"`
 }
 
 // Environment represents an environment-specific configuration in wrangler.toml
