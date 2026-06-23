@@ -159,6 +159,7 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		m.statusMsg = "" // clear transient status on any keypress
 		// Confirm dialog takes priority
 		if m.confirm.Visible() {
 			switch msg.String() {
