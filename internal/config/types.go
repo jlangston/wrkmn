@@ -44,6 +44,7 @@ type Process struct {
 	HealthCheck   *HealthCheck      `yaml:"health_check,omitempty"`
 	StartupDelay  Duration          `yaml:"startup_delay,omitempty"`
 	InspectorPort int               `yaml:"inspector_port,omitempty"`
+	DevMode       DevMode           `yaml:"dev_mode,omitempty"`
 	Restart       *RestartPolicy    `yaml:"restart,omitempty"`
 	LogPrefix     string            `yaml:"log_prefix,omitempty"`
 	Type          ProcessType       `yaml:"type,omitempty"`
@@ -58,6 +59,20 @@ type ProcessType string
 const (
 	ProcessTypeWorker  ProcessType = "worker"
 	ProcessTypeService ProcessType = "service"
+)
+
+// DevMode selects how a worker's `wrangler dev` connects to resources.
+type DevMode string
+
+const (
+	// DevModeLocal forces all bindings to local simulations (wrangler dev --local).
+	DevModeLocal DevMode = "local"
+	// DevModeRemoteBindings runs code locally but honors the worker's own
+	// `remote: true` bindings (plain wrangler dev). Debugger works.
+	DevModeRemoteBindings DevMode = "remote-bindings"
+	// DevModeRemote runs code on Cloudflare's edge (wrangler dev --remote).
+	// No local breakpoint debugging.
+	DevModeRemote DevMode = "remote"
 )
 
 // ProcessSource indicates where a process definition came from

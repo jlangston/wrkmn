@@ -149,6 +149,16 @@ func (l *Loader) validate(cfg *Config) error {
 		}
 	}
 
+	// Validate dev_mode
+	for name, proc := range cfg.Processes {
+		switch proc.DevMode {
+		case "", DevModeLocal, DevModeRemoteBindings, DevModeRemote:
+			// Valid (empty defaults later)
+		default:
+			return fmt.Errorf("process %q: invalid dev_mode %q (must be local, remote-bindings, or remote)", name, proc.DevMode)
+		}
+	}
+
 	return nil
 }
 
@@ -262,6 +272,11 @@ func (l *Loader) applyDefaults(cfg *Config) {
 			} else {
 				proc.Type = ProcessTypeService
 			}
+		}
+
+		// Default workers to remote-bindings (today's plain `wrangler dev` behavior)
+		if proc.Type == ProcessTypeWorker && proc.DevMode == "" {
+			proc.DevMode = DevModeRemoteBindings
 		}
 
 		// Mark as config-sourced
