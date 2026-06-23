@@ -31,6 +31,8 @@ type TableModel struct {
 	debugView      *DebugView
 	debugSession   *debug.Session
 	statusMsg      string
+	modeSelector   *ModeSelector
+	confirm        confirmDialog
 }
 
 var (
@@ -77,6 +79,7 @@ func NewTableModel(workers []*worker.Worker, cfg *config.Config) TableModel {
 		scriptPopup:    NewScriptPopup(),
 		remoteLogsView: NewRemoteLogsView(),
 		envSelector:    NewEnvSelector(),
+		modeSelector:   NewModeSelector(),
 	}
 }
 
@@ -95,6 +98,7 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scriptPopup.SetSize(msg.Width, msg.Height)
 		m.remoteLogsView.SetSize(msg.Width, msg.Height)
 		m.envSelector.SetSize(msg.Width, msg.Height)
+		m.modeSelector.SetSize(msg.Width, msg.Height)
 		if m.debugView != nil {
 			m.debugView.SetSize(msg.Width, msg.Height)
 		}
@@ -155,6 +159,29 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Confirm dialog takes priority
+		if m.confirm.Visible() {
+			switch msg.String() {
+			case "y", "Y":
+				onYes := m.confirm.onYes
+				m.confirm.Hide()
+				if onYes != nil {
+					return onYes(m)
+				}
+				return m, nil
+			case "n", "N", "esc", "q":
+				m.confirm.Hide()
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Mode selector
+		if m.modeSelector.Visible() {
+			cmd := m.modeSelector.Update(msg)
+			return m, cmd
+		}
+
 		// Handle env selector first if visible
 		if m.envSelector.Visible() {
 			cmd := m.envSelector.Update(msg)
@@ -218,9 +245,13 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
-		return m.startWorker("dev")
+		return m.startWorkerGuarded("dev")
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("D"))):
+		if m.cursor < len(m.workers) && !m.workers[m.cursor].SupportsDebugging() {
+			m.statusMsg = "Debugging unavailable in full-remote mode (code runs on Cloudflare's edge)"
+			return m, nil
+		}
 		return m.enterDebug()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
@@ -230,7 +261,7 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.stopWorker()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("a"))):
-		return m.startAllWorkers()
+		return m.startAllWorkersGuarded()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("z"))):
 		return m.stopAllWorkers()
@@ -243,6 +274,9 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("e"))):
 		return m.showEnvSelector()
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("m"))):
+		return m.showModeSelector()
 	}
 
 	return m, nil
@@ -457,6 +491,50 @@ func (m TableModel) showEnvSelector() (TableModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m TableModel) showModeSelector() (TableModel, tea.Cmd) {
+	if m.cursor < len(m.workers) {
+		m.modeSelector.Show(m.workers[m.cursor])
+	}
+	return m, nil
+}
+
+// startWorkerGuarded confirms before starting a full-remote worker, otherwise starts immediately.
+func (m TableModel) startWorkerGuarded(script string) (TableModel, tea.Cmd) {
+	if m.cursor >= len(m.workers) {
+		return m, nil
+	}
+	w := m.workers[m.cursor]
+	if w.EffectiveDevMode() == config.DevModeRemote {
+		m.confirm.Show(
+			fmt.Sprintf("Start %q in FULL-REMOTE mode? Code runs on Cloudflare's edge and bindings hit real resources. Debugging is unavailable.", w.Name),
+			func(mm TableModel) (TableModel, tea.Cmd) { return mm.startWorker(script) },
+		)
+		return m, nil
+	}
+	return m.startWorker(script)
+}
+
+// startAllWorkersGuarded shows one confirmation listing every worker that would start in full-remote mode.
+func (m TableModel) startAllWorkersGuarded() (TableModel, tea.Cmd) {
+	var remote []string
+	for _, w := range m.workers {
+		if w.Status == worker.StatusRunning {
+			continue
+		}
+		if w.EffectiveDevMode() == config.DevModeRemote {
+			remote = append(remote, w.Name)
+		}
+	}
+	if len(remote) > 0 {
+		m.confirm.Show(
+			fmt.Sprintf("These workers will start in FULL-REMOTE mode (code on edge, real resources, no debugging): %s. Continue?", strings.Join(remote, ", ")),
+			func(mm TableModel) (TableModel, tea.Cmd) { return mm.startAllWorkers() },
+		)
+		return m, nil
+	}
+	return m.startAllWorkers()
+}
+
 func (m TableModel) View() string {
 	if m.currentView == ViewLogs {
 		return m.logView.View()
@@ -482,6 +560,16 @@ func (m TableModel) View() string {
 	if m.scriptPopup.Visible() {
 		popupView := m.scriptPopup.View()
 		// Center the popup on screen
+		return m.overlayPopup(tableView, popupView)
+	}
+
+	if m.modeSelector.Visible() {
+		popupView := m.modeSelector.View()
+		return m.overlayPopup(tableView, popupView)
+	}
+
+	if m.confirm.Visible() {
+		popupView := m.confirm.View(m.width)
 		return m.overlayPopup(tableView, popupView)
 	}
 
@@ -578,7 +666,7 @@ func (m TableModel) renderTable() string {
 	helpText := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		Padding(0, 1).
-		Render("j/k: navigate • d: dev • D: debug • s: scripts • r: remote logs • e: env • x: stop • a: all • l: logs • q: quit")
+		Render("j/k: navigate • d: dev • D: debug • m: mode • s: scripts • r: remote logs • e: env • x: stop • a: all • l: logs • q: quit")
 
 	// Add main container with border
 	rows := []string{table, "", helpText}
