@@ -16,17 +16,40 @@ import (
 	"wrkmn/internal/worker"
 )
 
-// appendInspectorFlag appends a wrangler `--inspector-port <port>` flag to a
-// bun/npm `run <script>` invocation, using the `--` passthrough separator so the
-// flag reaches the underlying `wrangler dev` rather than bun/npm itself.
+// buildWranglerPassthrough returns the args to append after a `bun run <script>`
+// (or configured command) invocation. They are placed behind a single `--`
+// separator so they reach the underlying `wrangler dev` rather than bun/npm.
 //
-// Without this, every `wrangler dev` defaults its V8 inspector to port 9229, so
-// only the first worker in a multi-worker project gets a working inspector and
-// the rest collide. Assigning each worker its configured inspector_port lets the
-// in-TUI debugger (and external clients like VS Code) attach to any of them.
-func appendInspectorFlag(args []string, inspectorPort int) []string {
-	out := append([]string{}, args...)
-	return append(out, "--", "--inspector-port", strconv.Itoa(inspectorPort))
+// Mode mapping:
+//
+//	local           -> --inspector-port <p> --local   (debugger on)
+//	remote-bindings -> --inspector-port <p>            (debugger on; honors `remote: true` bindings)
+//	remote          -> --remote                        (code on edge; no inspector, debugger off)
+//
+// `--env <env>` is appended for any mode when env is non-empty. Returns nil when
+// there are no flags to add (so callers can append unconditionally).
+func buildWranglerPassthrough(mode config.DevMode, inspectorPort int, env string) []string {
+	if mode == "" {
+		mode = config.DevModeRemoteBindings
+	}
+
+	var flags []string
+	if mode != config.DevModeRemote && inspectorPort > 0 {
+		flags = append(flags, "--inspector-port", strconv.Itoa(inspectorPort))
+	}
+	switch mode {
+	case config.DevModeLocal:
+		flags = append(flags, "--local")
+	case config.DevModeRemote:
+		flags = append(flags, "--remote")
+	}
+	if env != "" {
+		flags = append(flags, "--env", env)
+	}
+	if len(flags) == 0 {
+		return nil
+	}
+	return append([]string{"--"}, flags...)
 }
 
 type Manager struct {
@@ -160,9 +183,7 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	runArgs := []string{"run", script}
-	if w.InspectorPort > 0 {
-		runArgs = appendInspectorFlag(runArgs, w.InspectorPort)
-	}
+	runArgs = append(runArgs, buildWranglerPassthrough(w.DevMode, w.InspectorPort, w.SelectedEnv)...)
 	cmd := exec.CommandContext(ctx, "bun", runArgs...)
 	cmd.Dir = w.Path
 	// Set process group to handle signals properly
@@ -332,7 +353,7 @@ func (m *Manager) readLogs(reader io.Reader, buffer *CircularBuffer, prefix stri
 }
 
 // StartProcess starts a generic process from config
-func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Process) (*Process, error) {
+func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Process, w *worker.Worker) (*Process, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -342,11 +363,23 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 
 	ctx, cancel := context.WithCancel(ctx)
 
-	// Build command with args. For worker processes that declare an inspector
-	// port, forward it to wrangler so its V8 inspector binds a distinct port.
+	// Build command with args. For worker processes, forward wrangler passthrough
+	// flags (inspector port, dev mode, env) so wrangler dev receives them.
 	args := cfg.Args
-	if cfg.Type == config.ProcessTypeWorker && cfg.InspectorPort > 0 {
-		args = appendInspectorFlag(args, cfg.InspectorPort)
+	if cfg.Type == config.ProcessTypeWorker {
+		mode := cfg.DevMode
+		inspectorPort := cfg.InspectorPort
+		env := ""
+		if w != nil {
+			if w.DevMode != "" {
+				mode = w.DevMode
+			}
+			env = w.SelectedEnv
+			if w.InspectorPort > 0 {
+				inspectorPort = w.InspectorPort
+			}
+		}
+		args = append(args, buildWranglerPassthrough(mode, inspectorPort, env)...)
 	}
 	var cmd *exec.Cmd
 	if len(args) > 0 {
@@ -392,6 +425,7 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 
 	process := &Process{
 		Name:      name,
+		Worker:    w,
 		Config:    cfg,
 		Cmd:       cmd,
 		Cancel:    cancel,

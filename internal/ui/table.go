@@ -305,10 +305,7 @@ func (m TableModel) startWorker(script string) (TableModel, tea.Cmd) {
 			}
 
 			return m, func() tea.Msg {
-				p, err := m.manager.StartProcess(context.Background(), workerName, &procCopy)
-				if err == nil && p != nil {
-					p.Worker = w
-				}
+				_, err := m.manager.StartProcess(context.Background(), workerName, &procCopy, w)
 				return processStartedMsg{workerName: workerName, err: err}
 			}
 		}
@@ -396,10 +393,7 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 	return m, func() tea.Msg {
 		for _, ws := range toStart {
 			if ws.isConfig {
-				p, err := m.manager.StartProcess(context.Background(), ws.w.Name, ws.proc)
-				if err == nil && p != nil {
-					p.Worker = ws.w
-				}
+				m.manager.StartProcess(context.Background(), ws.w.Name, ws.proc, ws.w)
 			} else {
 				m.manager.StartWorker(ws.w, ws.script)
 			}
