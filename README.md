@@ -103,7 +103,7 @@ defaults:
 - `worker` - CF Worker with inspector port for debugging
 - `service` - Generic process (docker, database, etc.)
 
-## Dev Modes
+### Dev Modes
 
 Each worker runs in one of three modes (press `m` to switch; set a default with `dev_mode:` in `worker-compose.yaml`):
 
