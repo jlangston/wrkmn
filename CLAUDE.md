@@ -154,6 +154,13 @@ defaults:
 - `worker` - CF Worker with inspector port for debugging
 - `service` - Generic process (docker, database, etc.)
 
+**Dev Modes (workers):**
+- `local` → `wrangler dev --local` (all bindings local; debugger on)
+- `remote-bindings` (default) → plain `wrangler dev` (honors `remote: true` bindings; debugger on)
+- `remote` → `wrangler dev --remote` (code on edge; debugger off)
+
+Set per-process via `dev_mode:` in config, or switch at runtime with `m`.
+
 **Dependency Conditions:**
 - `process_started` - Wait for process to start
 - `process_healthy` - Wait for health check to pass

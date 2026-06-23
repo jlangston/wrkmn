@@ -103,6 +103,18 @@ defaults:
 - `worker` - CF Worker with inspector port for debugging
 - `service` - Generic process (docker, database, etc.)
 
+## Dev Modes
+
+Each worker runs in one of three modes (press `m` to switch; set a default with `dev_mode:` in `worker-compose.yaml`):
+
+| Mode | `wrangler dev` | Bindings | Debugger |
+| --- | --- | --- | --- |
+| `local` | `--local` | all local simulations | ✅ |
+| `remote-bindings` (default) | _(none)_ | honors each worker's `remote: true` bindings | ✅ |
+| `remote` (full-remote) | `--remote` | all remote, code on edge | ❌ |
+
+**Full-remote caveats:** slower iteration (upload per change), a 50-routes-per-zone limit, deployed secrets are not loaded (use local `.dev.vars`), and breakpoint debugging is unavailable. wrkmn asks for confirmation before starting a worker in this mode.
+
 ### Dependency Conditions
 
 - `process_started` - Wait for process to start
@@ -124,6 +136,7 @@ defaults:
 | `Enter` / `l` | View logs |
 | `d` | Start (dev) |
 | `D` | Enter debug mode (running CF Workers only) |
+| `m` | Select dev mode (local / remote-bindings / full-remote) |
 | `s` | Run a script |
 | `r` | Remote logs (CF Workers) |
 | `e` | Select environment |
