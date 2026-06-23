@@ -501,7 +501,7 @@ func writeTempConfig(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker-compose.yaml")
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	return path
@@ -515,7 +515,6 @@ processes:
     command: bun
     args: [run, dev]
     type: worker
-    inspector_port: 9229
 `)
 	cfg, err := NewLoader(path).Load()
 	if err != nil {
@@ -555,7 +554,9 @@ processes:
     type: worker
     dev_mode: bogus
 `)
-	if _, err := NewLoader(path).Load(); err == nil {
+	_, err := NewLoader(path).Load()
+	if err == nil {
 		t.Fatal("expected error for invalid dev_mode, got nil")
 	}
+	assert.Contains(t, err.Error(), "invalid dev_mode")
 }
