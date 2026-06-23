@@ -28,6 +28,8 @@ func TestBuildWranglerPassthrough(t *testing.T) {
 		{"remote with env", config.DevModeRemote, 9229, "production",
 			[]string{"--", "--remote", "--env", "production"}},
 		{"no port no env remote-bindings yields nil", config.DevModeRemoteBindings, 0, "", nil},
+		{"local with no inspector port", config.DevModeLocal, 0, "",
+			[]string{"--", "--local"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

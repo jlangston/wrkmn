@@ -365,7 +365,7 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 
 	// Build command with args. For worker processes, forward wrangler passthrough
 	// flags (inspector port, dev mode, env) so wrangler dev receives them.
-	args := cfg.Args
+	args := append([]string{}, cfg.Args...)
 	if cfg.Type == config.ProcessTypeWorker {
 		mode := cfg.DevMode
 		inspectorPort := cfg.InspectorPort
