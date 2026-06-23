@@ -3,6 +3,7 @@ package worker
 import (
 	"time"
 
+	"wrkmn/internal/config"
 	"wrkmn/internal/wrangler"
 )
 
@@ -26,6 +27,10 @@ type Worker struct {
 
 	// Currently selected environment for remote operations (logs, analytics)
 	SelectedEnv string `json:"selected_env,omitempty"`
+
+	// DevMode is the runtime-selected dev mode (local / remote-bindings / remote).
+	// Empty means remote-bindings (see EffectiveDevMode).
+	DevMode config.DevMode `json:"dev_mode,omitempty"`
 
 	// AccountID from wrangler.toml (root level)
 	AccountID string `json:"account_id,omitempty"`
@@ -76,6 +81,20 @@ func (w *Worker) GetCurrentAccountID() string {
 // HasEnvironments returns true if the worker has multiple environments configured
 func (w *Worker) HasEnvironments() bool {
 	return len(w.Environments) > 1
+}
+
+// EffectiveDevMode returns the selected dev mode, defaulting to remote-bindings.
+func (w *Worker) EffectiveDevMode() config.DevMode {
+	if w.DevMode == "" {
+		return config.DevModeRemoteBindings
+	}
+	return w.DevMode
+}
+
+// SupportsDebugging reports whether breakpoint debugging is available in the
+// current dev mode. Full-remote runs on the edge, so the local inspector cannot attach.
+func (w *Worker) SupportsDebugging() bool {
+	return w.EffectiveDevMode() != config.DevModeRemote
 }
 
 // IsCloudflareWorker returns true if this worker has a wrangler.toml configuration
