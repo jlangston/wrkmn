@@ -120,6 +120,7 @@ func runApp(cmd *cobra.Command, args []string) {
 			Path:          proc.WorkingDir,
 			Status:        worker.StatusStopped,
 			InspectorPort: proc.InspectorPort,
+			DevMode:       proc.DevMode,
 			Scripts: map[string]string{
 				"_config": proc.Command, // Special marker for config-based processes
 			},

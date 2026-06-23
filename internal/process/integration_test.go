@@ -34,7 +34,7 @@ func TestProcessLifecycle_StartStop(t *testing.T) {
 			Args:    []string{"60"},
 		}
 
-		proc, err := manager.StartProcess(ctx, "sleeper", cfg)
+		proc, err := manager.StartProcess(ctx, "sleeper", cfg, nil)
 		require.NoError(t, err)
 		require.NotNil(t, proc)
 
@@ -64,7 +64,7 @@ func TestProcessLifecycle_StartStop(t *testing.T) {
 			},
 		}
 
-		proc, err := manager.StartProcess(ctx, "env-test", cfg)
+		proc, err := manager.StartProcess(ctx, "env-test", cfg, nil)
 		require.NoError(t, err)
 
 		// Wait for output
@@ -96,7 +96,7 @@ func TestProcessLifecycle_StartStop(t *testing.T) {
 			WorkingDir: tmpDir,
 		}
 
-		proc, err := manager.StartProcess(ctx, "pwd-test", cfg)
+		proc, err := manager.StartProcess(ctx, "pwd-test", cfg, nil)
 		require.NoError(t, err)
 
 		// Wait for output
@@ -127,7 +127,7 @@ func TestProcessLifecycle_Restart(t *testing.T) {
 			Args:    []string{"-c", "echo 'started' && sleep 60"},
 		}
 
-		proc, err := manager.StartProcess(ctx, "restart-test", cfg)
+		proc, err := manager.StartProcess(ctx, "restart-test", cfg, nil)
 		require.NoError(t, err)
 
 		time.Sleep(500 * time.Millisecond)
@@ -138,7 +138,7 @@ func TestProcessLifecycle_Restart(t *testing.T) {
 		manager.StopProcess("restart-test")
 		time.Sleep(300 * time.Millisecond)
 
-		proc2, err := manager.StartProcess(ctx, "restart-test", cfg)
+		proc2, err := manager.StartProcess(ctx, "restart-test", cfg, nil)
 		require.NoError(t, err)
 
 		time.Sleep(500 * time.Millisecond)
@@ -165,7 +165,7 @@ func TestProcessLifecycle_StopAll(t *testing.T) {
 			Command: "sleep",
 			Args:    []string{"60"},
 		}
-		_, err := manager.StartProcess(ctx, fmt.Sprintf("proc-%d", i), cfg)
+		_, err := manager.StartProcess(ctx, fmt.Sprintf("proc-%d", i), cfg, nil)
 		require.NoError(t, err)
 	}
 
@@ -350,7 +350,7 @@ func TestLogCapture_StdoutStderr(t *testing.T) {
 			Args:    []string{"-c", "echo 'stdout_message' && echo 'stderr_message' >&2 && sleep 5"},
 		}
 
-		proc, err := manager.StartProcess(ctx, "log-test", cfg)
+		proc, err := manager.StartProcess(ctx, "log-test", cfg, nil)
 		require.NoError(t, err)
 
 		// Wait for output
@@ -389,7 +389,7 @@ func TestLogCapture_CircularBuffer(t *testing.T) {
 			Args:    []string{"-c", "for i in $(seq 1 1500); do echo \"line_$i\"; done && sleep 5"},
 		}
 
-		proc, err := manager.StartProcess(ctx, "buffer-test", cfg)
+		proc, err := manager.StartProcess(ctx, "buffer-test", cfg, nil)
 		require.NoError(t, err)
 
 		// Wait for output
@@ -420,7 +420,7 @@ func TestLogCapture_ContinuousOutput(t *testing.T) {
 			Args:    []string{"-c", "while true; do date; sleep 0.2; done"},
 		}
 
-		proc, err := manager.StartProcess(ctx, "continuous-test", cfg)
+		proc, err := manager.StartProcess(ctx, "continuous-test", cfg, nil)
 		require.NoError(t, err)
 
 		// Check logs grow over time
@@ -479,7 +479,7 @@ func TestDependencyOrdering_SimpleChain(t *testing.T) {
 		var startOrder []string
 		starter := func(ctx context.Context, name string, proc *config.Process) (*process.Process, error) {
 			startOrder = append(startOrder, name)
-			return manager.StartProcess(ctx, name, proc)
+			return manager.StartProcess(ctx, name, proc, nil)
 		}
 
 		scheduler := process.NewScheduler(graph, starter)
@@ -542,7 +542,7 @@ func TestDependencyOrdering_DiamondPattern(t *testing.T) {
 		var startOrder []string
 		starter := func(ctx context.Context, name string, proc *config.Process) (*process.Process, error) {
 			startOrder = append(startOrder, name)
-			return manager.StartProcess(ctx, name, proc)
+			return manager.StartProcess(ctx, name, proc, nil)
 		}
 
 		scheduler := process.NewScheduler(graph, starter)

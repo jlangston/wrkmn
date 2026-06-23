@@ -43,7 +43,7 @@ func buildWranglerPassthrough(mode config.DevMode, inspectorPort int, env string
 	case config.DevModeRemote:
 		flags = append(flags, "--remote")
 	}
-	if env != "" {
+	if env != "" && env != "production" {
 		flags = append(flags, "--env", env)
 	}
 	if len(flags) == 0 {
