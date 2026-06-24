@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"wrkmn/internal/clipboard"
 	"wrkmn/internal/debug"
 	"wrkmn/internal/theme"
 	"wrkmn/internal/vi"
@@ -46,6 +47,8 @@ type ConsoleView struct {
 func NewConsoleView(session *debug.Session, evaluator *debug.Evaluator) *ConsoleView {
 	input := vi.NewModel()
 	input.SetPrompt("> ")
+	// Yanks in the console copy to the system clipboard via OSC 52.
+	input.SetOnYank(clipboard.Copy)
 
 	return &ConsoleView{
 		session:      session,

@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"wrkmn/internal/clipboard"
 	"wrkmn/internal/process"
 )
 
@@ -349,13 +349,11 @@ func (lv *LogView) yankText(text string) {
 	lv.yankedText = text
 	lineCount := strings.Count(text, "\n") + 1
 
-	// Try to copy to system clipboard
-	err := clipboard.WriteAll(text)
-	if err != nil {
-		lv.yankMessage = fmt.Sprintf("Yanked %d line(s) (clipboard unavailable)", lineCount)
-	} else {
-		lv.yankMessage = fmt.Sprintf("Yanked %d line(s) to clipboard", lineCount)
-	}
+	// Copy to the system clipboard via OSC 52 (works over SSH/tmux). This is
+	// fire-and-forget: the terminal does not acknowledge it, so there's no
+	// failure to report.
+	clipboard.Copy(text)
+	lv.yankMessage = fmt.Sprintf("Yanked %d line(s) to clipboard", lineCount)
 	lv.yankMsgTimer = 4 // Show message for ~2 seconds (4 ticks at 500ms)
 }
 

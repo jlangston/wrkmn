@@ -22,6 +22,11 @@ type Model struct {
 	width       int
 	placeholder string
 	prompt      string
+
+	// onYank, if set, is called with the yanked text after a yank operation
+	// (Y, yy, y{motion}). Used by the UI to copy to the system clipboard;
+	// kept as a callback so this package stays free of clipboard concerns.
+	onYank func(string)
 }
 
 // NewModel creates a new VI mode input model
@@ -57,6 +62,19 @@ func (m *Model) Init() tea.Cmd {
 // SetPrompt sets the input prompt
 func (m *Model) SetPrompt(p string) {
 	m.prompt = p
+}
+
+// SetOnYank registers a callback invoked with the yanked text after a yank
+// (Y, yy, y{motion}). Pass nil to disable. Delete/change do not trigger it.
+func (m *Model) SetOnYank(fn func(string)) {
+	m.onYank = fn
+}
+
+// fireYank invokes the onYank callback if one is registered.
+func (m *Model) fireYank(text string) {
+	if m.onYank != nil {
+		m.onYank(text)
+	}
 }
 
 // SetPlaceholder sets the placeholder text
@@ -338,7 +356,7 @@ func (m *Model) handleNormalMode(key tea.KeyMsg) KeyResult {
 		m.state.Reset()
 		return KeyResult{Action: ActionHandled}
 	case 'Y':
-		m.operators.YankLine()
+		m.fireYank(m.operators.YankLine())
 		m.state.Reset()
 		return KeyResult{Action: ActionHandled}
 
@@ -419,7 +437,7 @@ func (m *Model) handleOperatorPending(key tea.KeyMsg, count int) KeyResult {
 			m.state.Reset()
 			return KeyResult{Action: ActionHandled}
 		case op == OpYank && r == 'y':
-			m.operators.YankLine()
+			m.fireYank(m.operators.YankLine())
 			m.state.Reset()
 			return KeyResult{Action: ActionHandled}
 		}
@@ -433,7 +451,10 @@ func (m *Model) handleOperatorPending(key tea.KeyMsg, count int) KeyResult {
 		return KeyResult{Action: ActionHandled}
 	}
 
-	_, needInsert := m.operators.ApplyOperator(op, motion)
+	yankedOrDeleted, needInsert := m.operators.ApplyOperator(op, motion)
+	if op == OpYank {
+		m.fireYank(yankedOrDeleted)
+	}
 	m.state.Reset()
 
 	if needInsert || enterInsert {
