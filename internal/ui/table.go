@@ -453,7 +453,9 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 	})
 
 	// Reflect scheduler events in worker statuses; the 1s tick re-renders.
+	eventsDone := make(chan struct{})
 	go func() {
+		defer close(eventsDone)
 		for ev := range sched.Events() {
 			w := workerByName[ev.Name]
 			if w == nil {
@@ -480,6 +482,7 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 			sched.StartAll(context.Background())
 		}
 		sched.CloseEvents()
+		<-eventsDone
 		return allProcessesStartedMsg{}
 	}
 }
