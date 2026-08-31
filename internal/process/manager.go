@@ -57,15 +57,32 @@ type Manager struct {
 	mu        sync.RWMutex
 }
 
+// ProcessRunState describes whether a process is alive and, if not, how it ended.
+type ProcessRunState int
+
+const (
+	RunStateRunning ProcessRunState = iota
+	RunStateExited  // exited on its own
+	RunStateKilled  // we cancelled/stopped it
+)
+
 type Process struct {
 	Name      string          // Process name (from config or worker name)
 	Worker    *worker.Worker  // nil for non-worker processes
 	Config    *config.Process // nil for legacy worker-only processes
+	Script    string          // package.json script for StartWorker-launched processes ("" otherwise)
 	Cmd       *exec.Cmd
 	Cancel    context.CancelFunc
 	LogBuffer *CircularBuffer
 	Started   time.Time
 	mu        sync.RWMutex
+
+	// Exit tracking (guarded by mu)
+	runState ProcessRunState
+	exitCode int
+	exitErr  error
+	finished time.Time
+	killed   bool // true if we explicitly requested to stop this process
 }
 
 // Pid returns the process ID
@@ -85,6 +102,57 @@ func (p *Process) StartTime() time.Time {
 	return p.Started
 }
 
+// RunState reports whether the process is alive and, if not, how it ended.
+func (p *Process) RunState() ProcessRunState {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.runState
+}
+
+// ExitCode returns the recorded exit code (0 until the process exits; -1 for
+// exits with no extractable code).
+func (p *Process) ExitCode() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.exitCode
+}
+
+// ExitErr returns the error from cmd.Wait for a natural exit, if any.
+func (p *Process) ExitErr() error {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.exitErr
+}
+
+// Finished returns when the process exited (zero while running).
+func (p *Process) Finished() time.Time {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.finished
+}
+
+// recordExit stores the outcome of cmd.Wait. killed marks an externally
+// requested stop (context cancelled) rather than a natural exit.
+func (p *Process) recordExit(waitErr error, killed bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.finished = time.Now()
+	if killed {
+		p.runState = RunStateKilled
+		return
+	}
+	p.runState = RunStateExited
+	p.exitErr = waitErr
+	switch e := waitErr.(type) {
+	case nil:
+		p.exitCode = 0
+	case *exec.ExitError:
+		p.exitCode = e.ExitCode()
+	default:
+		p.exitCode = -1
+	}
+}
+
 // Stop stops the process
 func (p *Process) Stop() error {
 	p.mu.Lock()
@@ -93,6 +161,9 @@ func (p *Process) Stop() error {
 	if p.Cmd == nil || p.Cmd.Process == nil {
 		return nil
 	}
+
+	// Mark that we're explicitly stopping this process
+	p.killed = true
 
 	// Kill the entire process group to prevent orphaned processes
 	pgid, err := syscall.Getpgid(p.Cmd.Process.Pid)
@@ -142,6 +213,29 @@ func NewCircularBuffer(capacity int) *CircularBuffer {
 	}
 }
 
+// superviseProcess waits for the process to end, records its exit state, and
+// reflects the outcome on the worker's status. Externally requested stops
+// (StopWorker/StopProcess/StopAll) manage status themselves.
+func (m *Manager) superviseProcess(ctx context.Context, p *Process) {
+	waitErr := p.Cmd.Wait()
+	// Check if we explicitly requested to kill this process (set in Stop())
+	p.mu.RLock()
+	killed := p.killed
+	p.mu.RUnlock()
+	p.recordExit(waitErr, killed)
+	if killed {
+		return
+	}
+
+	if p.Worker != nil {
+		if p.ExitCode() == 0 {
+			p.Worker.Status = worker.StatusStopped
+		} else {
+			p.Worker.Status = worker.StatusFailed
+		}
+	}
+}
+
 func (cb *CircularBuffer) Write(line string) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -171,8 +265,11 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.processes[w.Name]; exists {
-		return fmt.Errorf("worker %s is already running", w.Name)
+	if existing, exists := m.processes[w.Name]; exists {
+		if existing.RunState() == RunStateRunning {
+			return fmt.Errorf("worker %s is already running", w.Name)
+		}
+		delete(m.processes, w.Name) // dead entry from a previous run — replace it
 	}
 
 	_, exists := w.Scripts[script]
@@ -208,7 +305,9 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 	}
 
 	process := &Process{
+		Name:      w.Name,
 		Worker:    w,
+		Script:    script,
 		Cmd:       cmd,
 		Cancel:    cancel,
 		LogBuffer: logBuffer,
@@ -226,26 +325,7 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 	go m.readLogs(stdout, logBuffer, "STDOUT")
 	go m.readLogs(stderr, logBuffer, "STDERR")
 
-	// Use a goroutine that can be interrupted by context cancellation
-	go func(ctx context.Context, name string) {
-		done := make(chan struct{})
-		go func() {
-			cmd.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			m.mu.Lock()
-			if proc, exists := m.processes[name]; exists && proc.Worker != nil {
-				proc.Worker.Status = worker.StatusStopped
-			}
-			m.mu.Unlock()
-		case <-ctx.Done():
-			// Context cancelled, process is being stopped externally
-			// No need to update status as StopWorker handles it
-		}
-	}(ctx, w.Name)
+	go m.superviseProcess(ctx, process)
 
 	w.Status = worker.StatusRunning
 	return nil
@@ -357,8 +437,11 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.processes[name]; exists {
-		return nil, fmt.Errorf("process %s is already running", name)
+	if existing, exists := m.processes[name]; exists {
+		if existing.RunState() == RunStateRunning {
+			return nil, fmt.Errorf("process %s is already running", name)
+		}
+		delete(m.processes, name) // dead entry from a previous run — replace it
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -444,24 +527,7 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 	go m.readLogs(stdout, logBuffer, "STDOUT")
 	go m.readLogs(stderr, logBuffer, "STDERR")
 
-	// Use a goroutine that can be interrupted by context cancellation
-	go func(ctx context.Context, processName string) {
-		done := make(chan struct{})
-		go func() {
-			cmd.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			// Process exited naturally
-			m.mu.Lock()
-			// Mark process as stopped when it exits
-			m.mu.Unlock()
-		case <-ctx.Done():
-			// Context cancelled, process is being stopped externally
-		}
-	}(ctx, name)
+	go m.superviseProcess(ctx, process)
 
 	return process, nil
 }

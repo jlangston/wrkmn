@@ -1,11 +1,14 @@
 package process
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"wrkmn/internal/config"
+	"wrkmn/internal/worker"
 )
 
 func TestCircularBuffer_ThreadSafe(t *testing.T) {
@@ -202,4 +205,105 @@ func TestNewManager(t *testing.T) {
 	assert.NotNil(t, m)
 	assert.NotNil(t, m.processes)
 	assert.Empty(t, m.processes)
+}
+
+// waitForExit polls until the process leaves RunStateRunning or the timeout hits.
+func waitForExit(t *testing.T, p *Process, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if p.RunState() != RunStateRunning {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("process still running after %s", timeout)
+}
+
+func TestExitCodeCapturedOnCrash(t *testing.T) {
+	m := NewManager()
+	cfg := &config.Process{Command: "sh", Args: []string{"-c", "exit 3"}, Type: config.ProcessTypeService}
+	p, err := m.StartProcess(context.Background(), "boom", cfg, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.StopAll()
+	waitForExit(t, p, 5*time.Second)
+	if p.RunState() != RunStateExited {
+		t.Fatalf("RunState = %v, want RunStateExited", p.RunState())
+	}
+	if p.ExitCode() != 3 {
+		t.Fatalf("ExitCode = %d, want 3", p.ExitCode())
+	}
+	if p.Finished().IsZero() {
+		t.Fatal("Finished not recorded")
+	}
+}
+
+func TestExitCodeZeroOnCleanExit(t *testing.T) {
+	m := NewManager()
+	cfg := &config.Process{Command: "true", Type: config.ProcessTypeService}
+	p, err := m.StartProcess(context.Background(), "ok", cfg, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.StopAll()
+	waitForExit(t, p, 5*time.Second)
+	if p.RunState() != RunStateExited || p.ExitCode() != 0 {
+		t.Fatalf("got (%v, %d), want (RunStateExited, 0)", p.RunState(), p.ExitCode())
+	}
+}
+
+func TestStoppedProcessMarkedKilled(t *testing.T) {
+	m := NewManager()
+	cfg := &config.Process{Command: "sleep", Args: []string{"30"}, Type: config.ProcessTypeService}
+	p, err := m.StartProcess(context.Background(), "sleeper", cfg, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.StopAll()
+	if err := m.StopProcess("sleeper"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	waitForExit(t, p, 5*time.Second)
+	if p.RunState() != RunStateKilled {
+		t.Fatalf("RunState = %v, want RunStateKilled", p.RunState())
+	}
+}
+
+func TestCrashedWorkerStatusFailed(t *testing.T) {
+	m := NewManager()
+	w := &worker.Worker{Name: "crashy", Status: worker.StatusStarting}
+	cfg := &config.Process{Command: "sh", Args: []string{"-c", "exit 2"}, Type: config.ProcessTypeService}
+	p, err := m.StartProcess(context.Background(), "crashy", cfg, w)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.StopAll()
+	waitForExit(t, p, 5*time.Second)
+	// status write happens right after recordExit; give it a moment
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && w.Status != worker.StatusFailed {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if w.Status != worker.StatusFailed {
+		t.Fatalf("worker status = %s, want failed", w.Status)
+	}
+}
+
+func TestDeadEntryReplacedOnRestart(t *testing.T) {
+	m := NewManager()
+	cfg := &config.Process{Command: "sh", Args: []string{"-c", "exit 1"}, Type: config.ProcessTypeService}
+	p, err := m.StartProcess(context.Background(), "flappy", cfg, nil)
+	if err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	defer m.StopAll()
+	waitForExit(t, p, 5*time.Second)
+	// A dead entry must not block a fresh start.
+	p2, err := m.StartProcess(context.Background(), "flappy", cfg, nil)
+	if err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	waitForExit(t, p2, 5*time.Second)
 }
