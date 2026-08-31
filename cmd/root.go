@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/signal"
@@ -9,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"wrkmn/internal/config"
+	"wrkmn/internal/preflight"
 	"wrkmn/internal/theme"
 	"wrkmn/internal/ui"
 	"wrkmn/internal/worker"
@@ -23,10 +25,11 @@ var (
 	BuildDate = "unknown"
 
 	// CLI flags
-	cfgFile     string
-	themeName   string
-	transparent bool
-	noDiscovery bool
+	cfgFile      string
+	themeName    string
+	transparent  bool
+	noDiscovery  bool
+	skipPreflight bool
 )
 
 // rootCmd represents the base command
@@ -67,6 +70,7 @@ func init() {
 
 	// Local flags
 	rootCmd.Flags().BoolVar(&noDiscovery, "no-discovery", false, "disable auto-discovery of workers")
+	rootCmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "skip pre-flight environment checks")
 
 	// Add subcommands
 	rootCmd.AddCommand(versionCmd)
@@ -110,6 +114,28 @@ func runApp(cmd *cobra.Command, args []string) {
 
 	// Apply UI configuration (theme, transparency)
 	config.ApplyUIConfig(cfg)
+
+	// Pre-flight: surface environment problems before any process starts.
+	// Errors block; warnings pause so they're seen before the alt-screen TUI
+	// hides them.
+	if !skipPreflight {
+		issues := preflight.Check(cfg)
+		if len(issues) > 0 {
+			for _, issue := range issues {
+				scope := issue.Process
+				if scope == "" {
+					scope = "config"
+				}
+				fmt.Fprintf(os.Stderr, "[%s] %s: %s\n", issue.Severity, scope, issue.Message)
+			}
+			if preflight.HasErrors(issues) {
+				fmt.Fprintln(os.Stderr, "\nPre-flight errors — fix them, or run 'wrkmn validate' for the full report. (--skip-preflight to bypass)")
+				os.Exit(1)
+			}
+			fmt.Fprint(os.Stderr, "\nWarnings above — press Enter to continue, Ctrl+C to abort... ")
+			bufio.NewReader(os.Stdin).ReadString('\n')
+		}
+	}
 
 	// Build workers from config processes first (they take priority)
 	var workers []*worker.Worker
