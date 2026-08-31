@@ -7,7 +7,7 @@ A powerful TUI for managing Cloudflare Workers and related processes. Think of i
 - **Auto-discovery** - Automatically discovers Cloudflare workers by scanning for `wrangler.toml` and `package.json`
 - **Process orchestration** - Manage workers alongside services like Docker, databases, etc.
 - **Dependency management** - Define startup order with health check conditions
-- **Health checks** - HTTP, TCP, and exec-based health monitoring
+- **Health checks** - HTTP, TCP, and exec-based checks gate startup ordering
 - **Live logs** - Real-time log streaming with viewport scrolling
 - **Integrated debugger** - CDP-based debugging for CF Workers (breakpoints, stepping, REPL)
 - **VI mode** - Bash-style vi editing in the debug console
@@ -52,6 +52,7 @@ go build -ldflags "-X wrkmn/cmd.Version=1.0.0 -X wrkmn/cmd.Commit=$(git rev-pars
 | `--theme` | `-t` | Color theme: default, dracula, catppuccin, nord |
 | `--transparent` | | Use terminal's background color |
 | `--no-discovery` | | Disable auto-discovery of workers |
+| `--skip-preflight` | | Skip startup pre-flight environment checks |
 | `--help` | `-h` | Show help |
 
 ## Configuration
@@ -102,6 +103,19 @@ defaults:
 
 - `worker` - CF Worker with inspector port for debugging
 - `service` - Generic process (docker, database, etc.)
+- `oneshot` - runs once; exit 0 marks it completed; dependents can wait on it with `condition: process_completed`
+
+### Restart Policy
+
+```yaml
+defaults:
+  restart:
+    enabled: true     # restart worker/service processes that crash
+    max_tries: 3      # consecutive crash restarts before giving up (default 3)
+    delay: 1s         # wait between restarts (default 1s)
+```
+
+Applies to config-defined `worker`/`service` processes (a process's own `restart:` overrides `defaults.restart`). A run lasting 10s+ resets the crash counter, and manual stops never trigger a restart. `oneshot` processes are never restarted.
 
 ### Dev Modes
 
@@ -115,16 +129,37 @@ Each worker runs in one of three modes (press `m` to switch; set a default with 
 
 **Full-remote caveats:** slower iteration (upload per change), a 50-routes-per-zone limit, deployed secrets are not loaded (use local `.dev.vars`), and breakpoint debugging is unavailable. wrkmn asks for confirmation before starting a worker in this mode.
 
+Dev mode (`m`) and environment (`e`) selections persist across sessions in
+`.wrkmn-state.json` next to your config — add it to your project's .gitignore.
+
 ### Dependency Conditions
 
 - `process_started` - Wait for process to start
 - `process_healthy` - Wait for health check to pass
+- `process_completed` - Wait for a `oneshot` to exit 0
 
 ### Health Check Types
 
 - `http` - HTTP GET returns 2xx
 - `tcp` - TCP connection succeeds
 - `exec` - Command exits with 0
+
+Health checks gate startup ordering (dependents wait on `process_healthy`);
+once start-all orchestration finishes, wrkmn does not keep monitoring health
+in the background.
+
+## Validation
+
+```bash
+wrkmn validate [directory]   # check config + environment, start nothing
+```
+
+Checks: YAML validity, dependency cycles, process types, dev modes, commands
+on PATH, working directories, env files (explicit = error, inherited default =
+warning), inspector port conflicts. Exit 0 unless errors.
+
+The TUI runs the same checks at startup: errors block, warnings pause for
+Enter. Bypass with `--skip-preflight`.
 
 ## Keybindings
 

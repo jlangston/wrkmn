@@ -39,6 +39,7 @@ go build -ldflags "-X wrkmn/cmd.Version=1.0.0 -X wrkmn/cmd.Commit=$(git rev-pars
 | `--theme` | `-t` | Color theme: default, dracula, catppuccin, nord |
 | `--transparent` | | Use terminal's background color |
 | `--no-discovery` | | Disable auto-discovery of workers |
+| `--skip-preflight` | | Skip startup pre-flight environment checks |
 | `--help` | `-h` | Show help |
 
 ## Configuration (worker-compose.yaml)
@@ -90,11 +91,15 @@ defaults:
 ```
 ├── main.go                      # Entry point, calls cmd.Execute()
 ├── cmd/
-│   └── root.go                  # Cobra CLI commands and flags
+│   ├── root.go                  # Cobra CLI commands and flags
+│   └── validate.go              # `validate` subcommand (config + pre-flight check, no start)
 ├── internal/
 │   ├── config/                  # YAML configuration
 │   │   ├── types.go             # Config structs (Process, HealthCheck, etc.)
 │   │   └── loader.go            # YAML parsing, validation, defaults
+│   │
+│   ├── preflight/               # Environment pre-flight checks
+│   │   └── preflight.go         # Commands on PATH, working dirs, env files, inspector ports
 │   │
 │   ├── worker/                  # Worker discovery
 │   │   ├── types.go             # Worker struct
@@ -132,6 +137,9 @@ defaults:
 │   │   ├── catppuccin.go        # Catppuccin Mocha (pastels)
 │   │   └── nord.go              # Nord (arctic blue)
 │   │
+│   ├── state/                   # Persisted runtime selections
+│   │   └── state.go             # Save/load/apply dev-mode + env selections (.wrkmn-state.json)
+│   │
 │   └── ui/                      # TUI components
 │       ├── model.go             # Main Bubble Tea model
 │       ├── views.go             # ViewMode enum, view switching
@@ -153,6 +161,7 @@ defaults:
 **Process Types:**
 - `worker` - CF Worker with inspector port for debugging
 - `service` - Generic process (docker, database, etc.)
+- `oneshot` - runs once; exit 0 marks it completed, anything else failed; never restarted
 
 **Dev Modes (workers):**
 - `local` → `wrangler dev --local` (all bindings local; debugger on)
@@ -164,11 +173,24 @@ Set per-process via `dev_mode:` in config, or switch at runtime with `m`.
 **Dependency Conditions:**
 - `process_started` - Wait for process to start
 - `process_healthy` - Wait for health check to pass
+- `process_completed` - Wait for a `oneshot` to exit 0
 
 **Health Check Types:**
 - `http` - HTTP GET returns 2xx
 - `tcp` - TCP connection succeeds
 - `exec` - Command exits with 0
+
+Health checks gate startup ordering only — the scheduler tears down its
+health monitors once start-all orchestration completes. wrkmn does not run
+continuous background health monitoring after startup.
+
+**Restart Policy:**
+- `defaults.restart` (`enabled`, `max_tries`, `delay`) is inherited by
+  `worker`/`service` processes that don't set their own `restart:`.
+- A crash restarts the process, up to `max_tries` consecutive crashes; a run
+  lasting 10s+ resets the counter.
+- Manual stops never trigger a restart. `oneshot` processes are never
+  restarted.
 
 **Debug Features (CF Workers only):**
 - Breakpoints (F9 or 'b')
@@ -181,11 +203,13 @@ Set per-process via `dev_mode:` in config, or switch at runtime with `m`.
 
 1. `cmd/root.go` parses flags and loads config
 2. `config.ApplyUIConfig()` sets theme and transparency
-3. `Discoverer` scans for workers if discovery enabled
-4. `Scheduler` builds dependency graph and starts processes in order
-5. `HealthChecker` monitors process health
-6. TUI displays status, logs, and debug views
-7. Debug session connects via CDP WebSocket to inspector ports
+3. `preflight.Check()` runs environment checks; errors block startup, warnings pause for Enter (`--skip-preflight` bypasses this)
+4. `Discoverer` scans for workers if discovery enabled
+5. `state.Load()`/`state.Apply()` restore prior dev-mode/env selections from `.wrkmn-state.json` onto the built workers
+6. TUI starts; pressing `a` (start all) routes config-defined processes through the `Scheduler` (dependency order, health gating, oneshot completion) while discovered workers start directly
+7. `HealthChecker` gates that start-all ordering — monitors are torn down once orchestration completes, so there's no continuous background health monitoring afterward
+8. TUI displays status, logs, and debug views
+9. Debug session connects via CDP WebSocket to inspector ports
 
 ### Key Keybindings
 
