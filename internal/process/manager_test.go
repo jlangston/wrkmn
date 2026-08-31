@@ -362,6 +362,41 @@ func TestRestartPolicyRestartsCrashedProcess(t *testing.T) {
 	}
 }
 
+func TestManualStopDuringRestartDelayPreventsRestart(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "runs")
+	cfg := &config.Process{
+		Command: "sh",
+		Args:    []string{"-c", "echo run >> " + marker + "; exit 1"},
+		Type:    config.ProcessTypeService,
+		Restart: &config.RestartPolicy{Enabled: true, MaxTries: 3, Delay: config.Duration{Duration: 500 * time.Millisecond}},
+	}
+	m := NewManager()
+	p, err := m.StartProcess(context.Background(), "flappy", cfg, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.StopAll()
+
+	// Process dies naturally; the dead entry stays in m.processes and
+	// maybeRestart begins its Delay sleep.
+	waitForExit(t, p, 5*time.Second)
+
+	// Stop it promptly, well within the 500ms restart delay.
+	if err := m.StopProcess("flappy"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	// Sleep past the restart delay and confirm no restart fired.
+	time.Sleep(800 * time.Millisecond)
+	if _, exists := m.GetProcess("flappy"); exists {
+		t.Fatal("process was restarted after a manual stop during the restart delay")
+	}
+	if got := countLines(t, marker); got != 1 {
+		t.Fatalf("runs = %d, want exactly 1 (no restart after manual stop)", got)
+	}
+}
+
 func TestKilledProcessNotRestarted(t *testing.T) {
 	cfg := &config.Process{
 		Command: "sleep",
