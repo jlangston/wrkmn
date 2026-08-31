@@ -13,6 +13,7 @@ import (
 	"wrkmn/internal/config"
 	"wrkmn/internal/debug"
 	"wrkmn/internal/process"
+	"wrkmn/internal/state"
 	"wrkmn/internal/worker"
 )
 
@@ -180,12 +181,18 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Mode selector
 		if m.modeSelector.Visible() {
 			cmd := m.modeSelector.Update(msg)
+			if !m.modeSelector.Visible() {
+				m.saveState() // selector closed — persist any selection
+			}
 			return m, cmd
 		}
 
 		// Handle env selector first if visible
 		if m.envSelector.Visible() {
 			cmd := m.envSelector.Update(msg)
+			if !m.envSelector.Visible() {
+				m.saveState() // selector closed — persist any selection
+			}
 			return m, cmd
 		}
 
@@ -916,4 +923,13 @@ func (m TableModel) tickCmd() tea.Cmd {
 
 func (m TableModel) GetManager() *process.Manager {
 	return m.manager
+}
+
+// saveState persists runtime selections. Best-effort: the TUI must not break
+// because the state file can't be written.
+func (m TableModel) saveState() {
+	if m.config == nil {
+		return
+	}
+	_ = state.Save(m.config.BaseDir, m.workers)
 }

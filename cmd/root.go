@@ -11,6 +11,7 @@ import (
 
 	"wrkmn/internal/config"
 	"wrkmn/internal/preflight"
+	"wrkmn/internal/state"
 	"wrkmn/internal/theme"
 	"wrkmn/internal/ui"
 	"wrkmn/internal/worker"
@@ -25,10 +26,10 @@ var (
 	BuildDate = "unknown"
 
 	// CLI flags
-	cfgFile      string
-	themeName    string
-	transparent  bool
-	noDiscovery  bool
+	cfgFile       string
+	themeName     string
+	transparent   bool
+	noDiscovery   bool
 	skipPreflight bool
 )
 
@@ -178,6 +179,11 @@ func runApp(cmd *cobra.Command, args []string) {
 				workers = append(workers, w)
 			}
 		}
+	}
+
+	// Restore runtime selections (dev mode, selected env) from prior sessions.
+	if saved, err := state.Load(cfg.BaseDir); err == nil {
+		state.Apply(saved, workers)
 	}
 
 	if len(workers) == 0 {
