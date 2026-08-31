@@ -383,68 +383,103 @@ func (m TableModel) stopWorker() (TableModel, tea.Cmd) {
 }
 
 func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
-	// Collect workers to start
-	type workerToStart struct {
-		w        *worker.Worker
-		script   string
-		isConfig bool
-		proc     *config.Process
+	// Discovered workers (no config entry) start directly; config-based
+	// processes go through the scheduler so depends_on ordering, health
+	// checks, and oneshot completion hold.
+	type discoveredStart struct {
+		w      *worker.Worker
+		script string
 	}
 
-	var toStart []workerToStart
+	var discovered []discoveredStart
+	configProcs := make(map[string]config.Process)
+	workerByName := make(map[string]*worker.Worker)
+
 	for _, w := range m.workers {
+		workerByName[w.Name] = w
+
+		if _, isConfig := w.Scripts["_config"]; isConfig && m.config != nil {
+			if proc, exists := m.config.Processes[w.Name]; exists {
+				configProcs[w.Name] = proc
+				if w.Status != worker.StatusRunning {
+					w.Status = worker.StatusStarting
+				}
+				continue
+			}
+		}
+
 		if w.Status == worker.StatusRunning {
 			continue
 		}
-
-		// Set status to starting
-		w.Status = worker.StatusStarting
-
-		// Check if this is a config-based process
-		if _, isConfig := w.Scripts["_config"]; isConfig && m.config != nil {
-			if proc, exists := m.config.Processes[w.Name]; exists {
-				procCopy := proc
-
-				// Resolve env files; a missing explicit env file fails this
-				// worker's start but doesn't block the others.
-				resolvedEnv, envErr := config.ResolveEnvFiles(&procCopy, m.config.Defaults, m.config.BaseDir)
-				if envErr != nil {
-					w.Status = worker.StatusFailed
-					m.statusMsg = fmt.Sprintf("%s: %v", w.Name, envErr)
-					continue
-				}
-				if len(resolvedEnv) > 0 {
-					procCopy.Environment = resolvedEnv
-				}
-
-				toStart = append(toStart, workerToStart{w: w, isConfig: true, proc: &procCopy})
-			}
-			continue
-		}
-
-		// Regular discovered worker
 		script := "dev"
 		if !w.HasScript("dev") && w.HasScript("start") {
 			script = "start"
 		}
 		if w.HasScript(script) {
-			toStart = append(toStart, workerToStart{w: w, script: script, isConfig: false})
+			w.Status = worker.StatusStarting
+			discovered = append(discovered, discoveredStart{w: w, script: script})
 		}
 	}
 
-	if len(toStart) == 0 {
+	if len(discovered) == 0 && len(configProcs) == 0 {
 		return m, nil
 	}
 
-	// Start all workers asynchronously
-	return m, func() tea.Msg {
-		for _, ws := range toStart {
-			if ws.isConfig {
-				m.manager.StartProcess(context.Background(), ws.w.Name, ws.proc, ws.w)
-			} else {
-				m.manager.StartWorker(ws.w, ws.script)
+	graph := process.NewDependencyGraph(configProcs)
+	// Pre-mark nodes that are already running so the scheduler skips them but
+	// dependents still see them as started/healthy.
+	for name := range configProcs {
+		if w := workerByName[name]; w != nil && w.Status == worker.StatusRunning {
+			graph.UpdateState(name, process.StateRunning)
+			graph.UpdateHealth(name, process.HealthHealthy)
+			if p, exists := m.manager.GetProcess(name); exists {
+				graph.SetProcess(name, p)
 			}
 		}
+	}
+
+	manager := m.manager
+	cfg := m.config
+	sched := process.NewScheduler(graph, func(ctx context.Context, name string, proc *config.Process) (*process.Process, error) {
+		procCopy := *proc
+		resolvedEnv, err := config.ResolveEnvFiles(&procCopy, cfg.Defaults, cfg.BaseDir)
+		if err != nil {
+			return nil, err
+		}
+		if len(resolvedEnv) > 0 {
+			procCopy.Environment = resolvedEnv
+		}
+		return manager.StartProcess(ctx, name, &procCopy, workerByName[name])
+	})
+
+	// Reflect scheduler events in worker statuses; the 1s tick re-renders.
+	go func() {
+		for ev := range sched.Events() {
+			w := workerByName[ev.Name]
+			if w == nil {
+				continue
+			}
+			switch ev.Type {
+			case process.EventStarting, process.EventWaiting:
+				w.Status = worker.StatusStarting
+			case process.EventStarted, process.EventHealthy:
+				w.Status = worker.StatusRunning
+			case process.EventCompleted:
+				w.Status = worker.StatusStopped // oneshot finished successfully
+			case process.EventFailed:
+				w.Status = worker.StatusFailed
+			}
+		}
+	}()
+
+	return m, func() tea.Msg {
+		for _, ds := range discovered {
+			manager.StartWorker(ds.w, ds.script)
+		}
+		if len(configProcs) > 0 {
+			sched.StartAll(context.Background())
+		}
+		sched.CloseEvents()
 		return allProcessesStartedMsg{}
 	}
 }

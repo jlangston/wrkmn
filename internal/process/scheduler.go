@@ -76,6 +76,12 @@ func (s *Scheduler) Events() <-chan StartEvent {
 	return s.events
 }
 
+// CloseEvents closes the event channel so range-consumers terminate. Call only
+// after StartAll has returned and no further scheduler operations will run.
+func (s *Scheduler) CloseEvents() {
+	close(s.events)
+}
+
 // StartAll starts all processes in dependency order
 func (s *Scheduler) StartAll(ctx context.Context) error {
 	// Get topological order
@@ -168,6 +174,12 @@ func (s *Scheduler) startProcess(ctx context.Context, name string) error {
 	node := s.graph.GetNode(name)
 	if node == nil {
 		return fmt.Errorf("unknown process: %s", name)
+	}
+
+	// Already running or completed (e.g. started individually from the UI
+	// before "start all") — nothing to do.
+	if node.State == StateRunning || node.State == StateCompleted {
+		return nil
 	}
 
 	// Wait for dependencies
