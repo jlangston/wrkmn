@@ -67,8 +67,8 @@ type ProcessRunState int
 
 const (
 	RunStateRunning ProcessRunState = iota
-	RunStateExited  // exited on its own
-	RunStateKilled  // we cancelled/stopped it
+	RunStateExited                  // exited on its own
+	RunStateKilled                  // we cancelled/stopped it
 )
 
 type Process struct {
