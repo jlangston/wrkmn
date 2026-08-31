@@ -134,18 +134,35 @@ func (l *Loader) validate(cfg *Config) error {
 	for name, proc := range cfg.Processes {
 		for _, dep := range proc.DependsOn {
 			switch dep.Condition {
-			case ConditionStarted, ConditionHealthy:
+			case ConditionStarted, ConditionHealthy, ConditionCompleted:
 				// Valid
 			case "":
 				return fmt.Errorf("process %q: depends_on[%s].condition is required", name, dep.Process)
 			default:
-				return fmt.Errorf("process %q: invalid depends_on[%s].condition %q (must be process_started or process_healthy)", name, dep.Process, dep.Condition)
+				return fmt.Errorf("process %q: invalid depends_on[%s].condition %q (must be process_started, process_healthy, or process_completed)", name, dep.Process, dep.Condition)
 			}
 
 			// Check that dependency exists
-			if _, exists := cfg.Processes[dep.Process]; !exists {
+			target, exists := cfg.Processes[dep.Process]
+			if !exists {
 				return fmt.Errorf("process %q: depends on unknown process %q", name, dep.Process)
 			}
+			if dep.Condition == ConditionCompleted && target.Type != ProcessTypeOneshot {
+				return fmt.Errorf("process %q: process_completed requires %q to be type oneshot", name, dep.Process)
+			}
+		}
+	}
+
+	// Validate process types
+	for name, proc := range cfg.Processes {
+		switch proc.Type {
+		case "", ProcessTypeWorker, ProcessTypeService, ProcessTypeOneshot:
+			// Valid (empty defaults later)
+		default:
+			return fmt.Errorf("process %q: invalid type %q (must be worker, service, or oneshot)", name, proc.Type)
+		}
+		if proc.Type == ProcessTypeOneshot && proc.HealthCheck != nil {
+			return fmt.Errorf("process %q: oneshot processes cannot have a health_check (they exit when done)", name)
 		}
 	}
 

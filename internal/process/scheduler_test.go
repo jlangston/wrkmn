@@ -3,6 +3,9 @@ package process
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -444,4 +447,97 @@ func TestProcessStatus(t *testing.T) {
 	assert.Equal(t, HealthHealthy, ps.Health)
 	assert.Equal(t, 12345, ps.PID)
 	assert.Equal(t, 5*time.Minute, ps.Uptime)
+}
+
+func readOrder(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return strings.Fields(string(data))
+}
+
+func TestOneshotCompletionSatisfiesDependent(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "order")
+	processes := map[string]config.Process{
+		"setup": {
+			Command: "sh",
+			Args:    []string{"-c", "sleep 0.2; echo setup >> " + marker},
+			Type:    config.ProcessTypeOneshot,
+		},
+		"app": {
+			Command: "sh",
+			Args:    []string{"-c", "echo app >> " + marker + "; sleep 30"},
+			Type:    config.ProcessTypeService,
+			DependsOn: []config.Dependency{
+				{Process: "setup", Condition: config.ConditionCompleted},
+			},
+		},
+	}
+	graph := NewDependencyGraph(processes)
+	m := NewManager()
+	defer m.StopAll()
+	sched := NewScheduler(graph, func(ctx context.Context, name string, proc *config.Process) (*Process, error) {
+		return m.StartProcess(ctx, name, proc, nil)
+	})
+
+	if err := sched.StartAll(context.Background()); err != nil {
+		t.Fatalf("StartAll: %v", err)
+	}
+
+	// "app" starting is async from the scheduler's perspective (no health
+	// check to wait on), so its own "echo app" may not have landed in the
+	// marker file the instant StartAll returns. Poll briefly rather than
+	// racing a bare read.
+	var order []string
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		order = readOrder(t, marker)
+		if len(order) >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(order) != 2 || order[0] != "setup" || order[1] != "app" {
+		t.Fatalf("order = %v, want [setup app]", order)
+	}
+	if st := graph.GetNode("setup").State; st != StateCompleted {
+		t.Fatalf("setup state = %v, want StateCompleted", st)
+	}
+}
+
+func TestOneshotFailureFailsDependent(t *testing.T) {
+	processes := map[string]config.Process{
+		"setup": {
+			Command: "sh",
+			Args:    []string{"-c", "exit 7"},
+			Type:    config.ProcessTypeOneshot,
+		},
+		"app": {
+			Command: "sleep",
+			Args:    []string{"30"},
+			Type:    config.ProcessTypeService,
+			DependsOn: []config.Dependency{
+				{Process: "setup", Condition: config.ConditionCompleted},
+			},
+		},
+	}
+	graph := NewDependencyGraph(processes)
+	m := NewManager()
+	defer m.StopAll()
+	sched := NewScheduler(graph, func(ctx context.Context, name string, proc *config.Process) (*Process, error) {
+		return m.StartProcess(ctx, name, proc, nil)
+	})
+
+	if err := sched.StartAll(context.Background()); err == nil {
+		t.Fatal("StartAll should fail when a oneshot dependency exits non-zero")
+	}
+	if st := graph.GetNode("setup").State; st != StateFailed {
+		t.Fatalf("setup state = %v, want StateFailed", st)
+	}
+	if _, exists := m.GetProcess("app"); exists {
+		t.Fatal("app should not have started after its dependency failed")
+	}
 }

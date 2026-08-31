@@ -59,6 +59,8 @@ type ProcessType string
 const (
 	ProcessTypeWorker  ProcessType = "worker"
 	ProcessTypeService ProcessType = "service"
+	// ProcessTypeOneshot runs once; exit 0 marks it completed, anything else failed.
+	ProcessTypeOneshot ProcessType = "oneshot"
 )
 
 // DevMode selects how a worker's `wrangler dev` connects to resources.
@@ -95,6 +97,8 @@ type DependencyCondition string
 const (
 	ConditionStarted DependencyCondition = "process_started"
 	ConditionHealthy DependencyCondition = "process_healthy"
+	// ConditionCompleted is satisfied when a oneshot dependency exits 0.
+	ConditionCompleted DependencyCondition = "process_completed"
 )
 
 // HealthCheck defines how to verify process health

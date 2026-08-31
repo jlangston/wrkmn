@@ -14,6 +14,7 @@ const (
 	StatePending ProcessState = iota
 	StateStarting
 	StateRunning
+	StateCompleted // a oneshot that exited 0
 	StateStopped
 	StateFailed
 )
@@ -26,6 +27,8 @@ func (s ProcessState) String() string {
 		return "starting"
 	case StateRunning:
 		return "running"
+	case StateCompleted:
+		return "completed"
 	case StateStopped:
 		return "stopped"
 	case StateFailed:
@@ -228,11 +231,15 @@ func (g *DependencyGraph) dependenciesSatisfied(name string) bool {
 
 		switch dep.Condition {
 		case config.ConditionStarted:
-			if depNode.State < StateRunning {
+			if depNode.State != StateRunning && depNode.State != StateCompleted {
 				return false
 			}
 		case config.ConditionHealthy:
 			if depNode.Health != HealthHealthy {
+				return false
+			}
+		case config.ConditionCompleted:
+			if depNode.State != StateCompleted {
 				return false
 			}
 		}

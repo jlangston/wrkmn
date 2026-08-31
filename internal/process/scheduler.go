@@ -27,6 +27,7 @@ const (
 	EventHealthy
 	EventFailed
 	EventWaiting
+	EventCompleted
 )
 
 func (t StartEventType) String() string {
@@ -41,6 +42,8 @@ func (t StartEventType) String() string {
 		return "failed"
 	case EventWaiting:
 		return "waiting"
+	case EventCompleted:
+		return "completed"
 	default:
 		return "unknown"
 	}
@@ -206,6 +209,13 @@ func (s *Scheduler) startProcess(ctx context.Context, name string) error {
 		Message: "process started",
 	})
 
+	// One-shot processes: wait for the command to finish. Exit 0 completes the
+	// node (satisfying process_started and process_completed); anything else
+	// fails it and dependents fail fast.
+	if node.Config.Type == config.ProcessTypeOneshot {
+		return s.waitForCompletion(ctx, name, proc)
+	}
+
 	// Handle startup delay if specified
 	if node.Config.StartupDelay.Duration > 0 {
 		time.Sleep(node.Config.StartupDelay.Duration)
@@ -301,7 +311,7 @@ func (s *Scheduler) waitForDependency(ctx context.Context, dep config.Dependency
 
 			switch dep.Condition {
 			case config.ConditionStarted:
-				if depNode.State >= StateRunning {
+				if depNode.State == StateRunning || depNode.State == StateCompleted {
 					return nil
 				}
 				if depNode.State == StateFailed {
@@ -314,6 +324,51 @@ func (s *Scheduler) waitForDependency(ctx context.Context, dep config.Dependency
 				if depNode.State == StateFailed {
 					return fmt.Errorf("dependency %s failed", dep.Process)
 				}
+			case config.ConditionCompleted:
+				if depNode.State == StateCompleted {
+					return nil
+				}
+				if depNode.State == StateFailed {
+					return fmt.Errorf("dependency %s failed", dep.Process)
+				}
+			}
+		}
+	}
+}
+
+// waitForCompletion polls a oneshot process until it exits, with the same
+// bounded pattern as waitForDependency.
+func (s *Scheduler) waitForCompletion(ctx context.Context, name string, proc *Process) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	timer := time.NewTimer(5 * time.Minute)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			s.graph.UpdateState(name, StateFailed)
+			s.sendEvent(StartEvent{Name: name, Type: EventFailed, Message: "timed out waiting for oneshot to finish"})
+			return fmt.Errorf("timeout waiting for %s to complete", name)
+		case <-ticker.C:
+			switch proc.RunState() {
+			case RunStateRunning:
+				// still going
+			case RunStateKilled:
+				s.graph.UpdateState(name, StateStopped)
+				return fmt.Errorf("%s was stopped before completing", name)
+			case RunStateExited:
+				if code := proc.ExitCode(); code != 0 {
+					s.graph.UpdateState(name, StateFailed)
+					s.sendEvent(StartEvent{Name: name, Type: EventFailed, Message: fmt.Sprintf("exited with code %d", code)})
+					return fmt.Errorf("%s exited with code %d", name, code)
+				}
+				s.graph.UpdateState(name, StateCompleted)
+				s.graph.UpdateHealth(name, HealthHealthy)
+				s.sendEvent(StartEvent{Name: name, Type: EventCompleted, Message: "completed"})
+				return nil
 			}
 		}
 	}

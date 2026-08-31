@@ -607,3 +607,71 @@ processes:
 	}
 	assert.Contains(t, err.Error(), "invalid dev_mode")
 }
+
+func TestUnknownProcessTypeRejected(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: bun
+    type: bogus
+`)
+	if _, err := NewLoader(path).Load(); err == nil {
+		t.Fatal("expected error for unknown type, got nil")
+	}
+}
+
+func TestOneshotWithHealthCheckRejected(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  setup:
+    command: sh
+    type: oneshot
+    health_check:
+      type: tcp
+      target: localhost:5432
+`)
+	if _, err := NewLoader(path).Load(); err == nil {
+		t.Fatal("expected error for oneshot with health_check, got nil")
+	}
+}
+
+func TestProcessCompletedRequiresOneshotTarget(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  db:
+    command: docker
+    type: service
+  app:
+    command: bun
+    type: worker
+    depends_on:
+      - process: db
+        condition: process_completed
+`)
+	if _, err := NewLoader(path).Load(); err == nil {
+		t.Fatal("expected error for process_completed on non-oneshot target, got nil")
+	}
+}
+
+func TestOneshotWithCompletedDependentAccepted(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  setup:
+    command: sh
+    args: [-c, "true"]
+    type: oneshot
+  app:
+    command: bun
+    type: worker
+    depends_on:
+      - process: setup
+        condition: process_completed
+`)
+	if _, err := NewLoader(path).Load(); err != nil {
+		t.Fatalf("valid oneshot config rejected: %v", err)
+	}
+}
