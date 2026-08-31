@@ -71,6 +71,7 @@ func init() {
 	// Add subcommands
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(themesCmd)
+	rootCmd.AddCommand(validateCmd)
 }
 
 func runApp(cmd *cobra.Command, args []string) {
