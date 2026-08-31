@@ -449,7 +449,12 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 		if len(resolvedEnv) > 0 {
 			procCopy.Environment = resolvedEnv
 		}
-		return manager.StartProcess(ctx, name, &procCopy, workerByName[name])
+		// Use a fresh background context here, not the scheduler's orchestration
+		// ctx: StartProcess runs the process under exec.CommandContext on the ctx
+		// it's given, and the process's lifetime is owned by the manager, not by
+		// start-all — it must keep running after orchestration completes and its
+		// ctx is cancelled below.
+		return manager.StartProcess(context.Background(), name, &procCopy, workerByName[name])
 	})
 
 	// Reflect scheduler events in worker statuses; the 1s tick re-renders.
@@ -479,7 +484,15 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 			manager.StartWorker(ds.w, ds.script)
 		}
 		if len(configProcs) > 0 {
-			sched.StartAll(context.Background())
+			// Health monitors (and other startup-scoped waits) are gated on this
+			// ctx — they exist only to hold up dependents during start-all.
+			// Nothing consumes graph health after orchestration finishes (the
+			// graph itself is discarded), so cancel it here to stop those
+			// goroutines instead of leaking one health monitor per health-checked
+			// process on every start-all cycle.
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sched.StartAll(ctx)
 		}
 		sched.CloseEvents()
 		<-eventsDone
