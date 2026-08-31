@@ -507,6 +507,53 @@ func writeTempConfig(t *testing.T, body string) string {
 	return path
 }
 
+func TestRestartPolicyInheritedFromDefaults(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: bun
+    args: [run, dev]
+    type: service
+defaults:
+  restart:
+    enabled: true
+`)
+	cfg, err := NewLoader(path).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	r := cfg.Processes["api"].Restart
+	if r == nil || !r.Enabled {
+		t.Fatalf("Restart = %+v, want inherited enabled policy", r)
+	}
+	if r.MaxTries != 3 {
+		t.Fatalf("MaxTries = %d, want defaulted 3", r.MaxTries)
+	}
+}
+
+func TestExplicitRestartPolicyNotOverridden(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: bun
+    type: service
+    restart:
+      enabled: false
+defaults:
+  restart:
+    enabled: true
+`)
+	cfg, err := NewLoader(path).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Processes["api"].Restart.Enabled {
+		t.Fatal("explicit restart.enabled=false was overridden by defaults")
+	}
+}
+
 func TestDevModeDefaultsToRemoteBindingsForWorkers(t *testing.T) {
 	path := writeTempConfig(t, `
 version: "1.0"

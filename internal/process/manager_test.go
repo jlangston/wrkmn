@@ -2,6 +2,9 @@ package process
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -317,5 +320,66 @@ func TestStopAllMarksKilled(t *testing.T) {
 	waitForExit(t, p, 5*time.Second)
 	if p.RunState() != RunStateKilled {
 		t.Fatalf("RunState = %v, want RunStateKilled", p.RunState())
+	}
+}
+
+func countLines(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return len(strings.Fields(string(data)))
+}
+
+func TestRestartPolicyRestartsCrashedProcess(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "runs")
+	cfg := &config.Process{
+		Command: "sh",
+		Args:    []string{"-c", "echo run >> " + marker + "; exit 1"},
+		Type:    config.ProcessTypeService,
+		Restart: &config.RestartPolicy{Enabled: true, MaxTries: 2, Delay: config.Duration{Duration: 20 * time.Millisecond}},
+	}
+	m := NewManager()
+	if _, err := m.StartProcess(context.Background(), "flappy", cfg, nil); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.StopAll()
+
+	// initial run + 2 restarts = 3 runs
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && countLines(t, marker) < 3 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := countLines(t, marker); got != 3 {
+		t.Fatalf("runs = %d, want 3 (initial + 2 restarts)", got)
+	}
+	// give it a chance to over-restart, then confirm it didn't
+	time.Sleep(300 * time.Millisecond)
+	if got := countLines(t, marker); got != 3 {
+		t.Fatalf("runs = %d after settle, want exactly 3", got)
+	}
+}
+
+func TestKilledProcessNotRestarted(t *testing.T) {
+	cfg := &config.Process{
+		Command: "sleep",
+		Args:    []string{"30"},
+		Type:    config.ProcessTypeService,
+		Restart: &config.RestartPolicy{Enabled: true, MaxTries: 3, Delay: config.Duration{Duration: 10 * time.Millisecond}},
+	}
+	m := NewManager()
+	p, err := m.StartProcess(context.Background(), "sleeper", cfg, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := m.StopProcess("sleeper"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	waitForExit(t, p, 5*time.Second)
+	time.Sleep(200 * time.Millisecond)
+	if _, exists := m.GetProcess("sleeper"); exists {
+		t.Fatal("killed process was restarted")
 	}
 }

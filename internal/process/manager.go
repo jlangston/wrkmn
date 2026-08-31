@@ -53,9 +53,14 @@ func buildWranglerPassthrough(mode config.DevMode, inspectorPort int, env string
 }
 
 type Manager struct {
-	processes map[string]*Process
-	mu        sync.RWMutex
+	processes    map[string]*Process
+	restartTries map[string]int
+	mu           sync.RWMutex
 }
+
+// restartHealthyAfter: a run at least this long counts as a successful run,
+// resetting the crash-loop counter.
+const restartHealthyAfter = 10 * time.Second
 
 // ProcessRunState describes whether a process is alive and, if not, how it ended.
 type ProcessRunState int
@@ -214,7 +219,8 @@ type CircularBuffer struct {
 
 func NewManager() *Manager {
 	return &Manager{
-		processes: make(map[string]*Process),
+		processes:    make(map[string]*Process),
+		restartTries: make(map[string]int),
 	}
 }
 
@@ -242,6 +248,47 @@ func (m *Manager) superviseProcess(p *Process) {
 		} else {
 			p.Worker.Status = worker.StatusFailed
 		}
+	}
+
+	m.maybeRestart(p)
+}
+
+// maybeRestart re-launches a config-based worker/service whose restart policy
+// allows it. Manual stops never reach here (killed processes return earlier in
+// superviseProcess), and a manual stop also clears the try counter.
+func (m *Manager) maybeRestart(p *Process) {
+	cfg := p.Config
+	if cfg == nil || cfg.Restart == nil || !cfg.Restart.Enabled {
+		return
+	}
+	if cfg.Type != config.ProcessTypeWorker && cfg.Type != config.ProcessTypeService {
+		return
+	}
+
+	m.mu.Lock()
+	if time.Since(p.Started) >= restartHealthyAfter {
+		m.restartTries[p.Name] = 0
+	}
+	tries := m.restartTries[p.Name]
+	if tries >= cfg.Restart.MaxTries {
+		m.mu.Unlock()
+		return
+	}
+	m.restartTries[p.Name] = tries + 1
+	m.mu.Unlock()
+
+	time.Sleep(cfg.Restart.Delay.Duration)
+
+	// A manual stop while we slept removes the map entry — don't resurrect.
+	m.mu.RLock()
+	_, stillTracked := m.processes[p.Name]
+	m.mu.RUnlock()
+	if !stillTracked {
+		return
+	}
+
+	if _, err := m.StartProcess(context.Background(), p.Name, cfg, p.Worker); err == nil && p.Worker != nil {
+		p.Worker.Status = worker.StatusRunning
 	}
 }
 
@@ -367,6 +414,7 @@ func (m *Manager) StopWorker(workerName string) error {
 
 	process.Cancel()
 	delete(m.processes, workerName)
+	delete(m.restartTries, workerName)
 	if process.Worker != nil {
 		process.Worker.Status = worker.StatusStopped
 	}
@@ -446,6 +494,7 @@ func (m *Manager) StopAll() {
 
 	// Clear the map
 	m.processes = make(map[string]*Process)
+	m.restartTries = make(map[string]int)
 }
 
 func (m *Manager) readLogs(reader io.Reader, buffer *CircularBuffer, prefix string) {
@@ -571,6 +620,7 @@ func (m *Manager) StopProcess(name string) error {
 	}
 
 	delete(m.processes, name)
+	delete(m.restartTries, name)
 	return nil
 }
 

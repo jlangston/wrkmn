@@ -254,6 +254,12 @@ func (l *Loader) applyDefaults(cfg *Config) {
 			}
 		}
 
+		// Inherit restart policy from defaults when the process doesn't set one
+		if proc.Restart == nil && cfg.Defaults.Restart != nil {
+			policy := *cfg.Defaults.Restart
+			proc.Restart = &policy
+		}
+
 		// Apply restart policy defaults
 		if proc.Restart != nil {
 			if proc.Restart.MaxTries == 0 {
