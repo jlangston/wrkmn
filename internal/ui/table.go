@@ -333,8 +333,14 @@ func (m TableModel) startWorker(script string) (TableModel, tea.Cmd) {
 		if proc, exists := m.config.Processes[w.Name]; exists {
 			procCopy := proc // Copy for closure
 
-			// Resolve env files and merge with inline environment
-			resolvedEnv, _ := config.ResolveEnvFiles(&procCopy, m.config.Defaults, m.config.BaseDir)
+			// Resolve env files and merge with inline environment. An
+			// explicitly configured env file that's missing fails the start.
+			resolvedEnv, envErr := config.ResolveEnvFiles(&procCopy, m.config.Defaults, m.config.BaseDir)
+			if envErr != nil {
+				w.Status = worker.StatusFailed
+				m.statusMsg = fmt.Sprintf("%s: %v", workerName, envErr)
+				return m, nil
+			}
 			if len(resolvedEnv) > 0 {
 				procCopy.Environment = resolvedEnv
 			}
@@ -399,8 +405,14 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 			if proc, exists := m.config.Processes[w.Name]; exists {
 				procCopy := proc
 
-				// Resolve env files and merge with inline environment
-				resolvedEnv, _ := config.ResolveEnvFiles(&procCopy, m.config.Defaults, m.config.BaseDir)
+				// Resolve env files; a missing explicit env file fails this
+				// worker's start but doesn't block the others.
+				resolvedEnv, envErr := config.ResolveEnvFiles(&procCopy, m.config.Defaults, m.config.BaseDir)
+				if envErr != nil {
+					w.Status = worker.StatusFailed
+					m.statusMsg = fmt.Sprintf("%s: %v", w.Name, envErr)
+					continue
+				}
 				if len(resolvedEnv) > 0 {
 					procCopy.Environment = resolvedEnv
 				}

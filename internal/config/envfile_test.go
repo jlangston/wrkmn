@@ -183,18 +183,19 @@ func TestResolveEnvFiles_EnvFilesArray(t *testing.T) {
 func TestResolveEnvFiles_MissingFilesIgnored(t *testing.T) {
 	dir := t.TempDir()
 
+	// Only default files are best-effort (skipped if missing).
+	// Explicit files error if missing, so we only test defaults here.
 	proc := &Process{
-		EnvFile:     "nonexistent.env",
 		Environment: map[string]string{"INLINE": "yes"},
 	}
 	defaults := ProcessDefaults{
-		EnvFile: "also-missing.env",
+		EnvFile: "also-missing.env", // Default files are skipped if missing
 	}
 
 	env, err := ResolveEnvFiles(proc, defaults, dir)
 	require.NoError(t, err)
 
-	// Should still have inline vars even if files are missing
+	// Should still have inline vars even if default files are missing
 	assert.Equal(t, "yes", env["INLINE"])
 }
 
@@ -275,4 +276,47 @@ func TestResolveEnvFiles_EmptyProcess(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, env)
+}
+
+func TestResolveEnvFilesExplicitMissingIsError(t *testing.T) {
+	dir := t.TempDir()
+	proc := &Process{WorkingDir: dir, EnvFile: "nope.env"}
+	if _, err := ResolveEnvFiles(proc, ProcessDefaults{}, dir); err == nil {
+		t.Fatal("expected error for missing explicit env_file, got nil")
+	}
+}
+
+func TestResolveEnvFilesExplicitListMissingIsError(t *testing.T) {
+	dir := t.TempDir()
+	proc := &Process{WorkingDir: dir, EnvFiles: []string{"nope.env"}}
+	if _, err := ResolveEnvFiles(proc, ProcessDefaults{}, dir); err == nil {
+		t.Fatal("expected error for missing explicit env_files entry, got nil")
+	}
+}
+
+func TestResolveEnvFilesDefaultMissingIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	proc := &Process{WorkingDir: dir, Environment: map[string]string{"A": "1"}}
+	env, err := ResolveEnvFiles(proc, ProcessDefaults{EnvFile: "absent.dev.vars"}, dir)
+	if err != nil {
+		t.Fatalf("defaulted missing env file must be skipped, got error: %v", err)
+	}
+	if env["A"] != "1" {
+		t.Fatalf("env = %v, want inline environment preserved", env)
+	}
+}
+
+func TestResolveEnvFilePathsProvenance(t *testing.T) {
+	dir := t.TempDir()
+	proc := &Process{WorkingDir: dir, EnvFile: ".dev.vars"}
+	refs := ResolveEnvFilePaths(proc, ProcessDefaults{EnvFile: "shared.env"}, dir)
+	if len(refs) != 2 {
+		t.Fatalf("refs = %d, want 2", len(refs))
+	}
+	if !refs[0].FromDefault || refs[0].Path != filepath.Join(dir, "shared.env") {
+		t.Fatalf("refs[0] = %+v, want defaults ref first", refs[0])
+	}
+	if refs[1].FromDefault || refs[1].Path != filepath.Join(dir, ".dev.vars") {
+		t.Fatalf("refs[1] = %+v, want explicit ref", refs[1])
+	}
 }

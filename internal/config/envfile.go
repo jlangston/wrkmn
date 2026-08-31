@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,16 +60,17 @@ func ParseEnvFile(path string) (map[string]string, error) {
 	return env, scanner.Err()
 }
 
-// ResolveEnvFiles loads and merges environment files for a process.
-// Returns merged environment map with proper priority:
-//  1. defaults.env_file (lowest priority)
-//  2. defaults.environment
-//  3. process.env_files (in array order)
-//  4. process.env_file
-//  5. process.environment (highest priority)
-func ResolveEnvFiles(proc *Process, defaults ProcessDefaults, baseDir string) (map[string]string, error) {
-	env := make(map[string]string)
+// EnvFileRef is a resolved env-file path plus its provenance. Files inherited
+// from defaults are best-effort; files a process asked for explicitly must exist.
+type EnvFileRef struct {
+	Path        string
+	FromDefault bool
+}
 
+// ResolveEnvFilePaths returns the env files that apply to a process in merge
+// order (lowest priority first). Relative paths resolve against baseDir for
+// defaults.env_file and against the process working dir otherwise.
+func ResolveEnvFilePaths(proc *Process, defaults ProcessDefaults, baseDir string) []EnvFileRef {
 	workingDir := proc.WorkingDir
 	if workingDir == "" {
 		workingDir = "."
@@ -77,52 +79,69 @@ func ResolveEnvFiles(proc *Process, defaults ProcessDefaults, baseDir string) (m
 		workingDir = filepath.Join(baseDir, workingDir)
 	}
 
-	// 1. Load defaults.env_file (relative to baseDir)
+	var refs []EnvFileRef
 	if defaults.EnvFile != "" {
 		path := defaults.EnvFile
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(baseDir, path)
 		}
-		if vars, err := ParseEnvFile(path); err == nil {
-			for k, v := range vars {
-				env[k] = v
-			}
-		}
-		// Ignore error if file doesn't exist - it's optional
+		refs = append(refs, EnvFileRef{Path: path, FromDefault: true})
 	}
-
-	// 2. Merge defaults.environment
-	for k, v := range defaults.Environment {
-		env[k] = v
-	}
-
-	// 3. Load process.env_files (relative to working_dir)
 	for _, file := range proc.EnvFiles {
 		path := file
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(workingDir, file)
 		}
-		if vars, err := ParseEnvFile(path); err == nil {
-			for k, v := range vars {
-				env[k] = v
-			}
-		}
+		refs = append(refs, EnvFileRef{Path: path})
 	}
-
-	// 4. Load process.env_file (relative to working_dir)
 	if proc.EnvFile != "" {
 		path := proc.EnvFile
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(workingDir, path)
 		}
-		if vars, err := ParseEnvFile(path); err == nil {
-			for k, v := range vars {
-				env[k] = v
+		refs = append(refs, EnvFileRef{Path: path})
+	}
+	return refs
+}
+
+// ResolveEnvFiles loads and merges environment files for a process.
+// Merge priority (lowest to highest):
+//  1. defaults.env_file — best-effort: a missing file is skipped (it may not
+//     apply to every process)
+//  2. defaults.environment
+//  3. process.env_files (in array order) — missing file is an error
+//  4. process.env_file — missing file is an error
+//  5. process.environment
+func ResolveEnvFiles(proc *Process, defaults ProcessDefaults, baseDir string) (map[string]string, error) {
+	env := make(map[string]string)
+
+	var explicit []EnvFileRef
+	for _, ref := range ResolveEnvFilePaths(proc, defaults, baseDir) {
+		if ref.FromDefault {
+			if vars, err := ParseEnvFile(ref.Path); err == nil {
+				for k, v := range vars {
+					env[k] = v
+				}
 			}
+			continue
+		}
+		explicit = append(explicit, ref)
+	}
+
+	for k, v := range defaults.Environment {
+		env[k] = v
+	}
+
+	for _, ref := range explicit {
+		vars, err := ParseEnvFile(ref.Path)
+		if err != nil {
+			return nil, fmt.Errorf("env file %s: %w", ref.Path, err)
+		}
+		for k, v := range vars {
+			env[k] = v
 		}
 	}
 
-	// 5. Merge process.environment (highest priority)
 	for k, v := range proc.Environment {
 		env[k] = v
 	}
