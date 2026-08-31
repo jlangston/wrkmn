@@ -34,6 +34,9 @@ type TableModel struct {
 	statusMsg      string
 	modeSelector   *ModeSelector
 	confirm        confirmDialog
+	// startAllCancel cancels an in-flight startAllWorkers orchestration, if
+	// any. See cancelStartAll and startAllWorkers.
+	startAllCancel context.CancelFunc
 }
 
 var (
@@ -238,6 +241,9 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, key.NewBinding(key.WithKeys("q", "ctrl+c"))):
+		// Stop any in-flight start-all before tearing everything down, so
+		// the scheduler doesn't resurrect or orphan processes past exit.
+		m.cancelStartAll()
 		// Ensure all processes are properly terminated
 		m.manager.StopAll()
 		return m, tea.Quit
@@ -297,6 +303,9 @@ func (m TableModel) handleLogsViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))):
+		// Stop any in-flight start-all before tearing everything down, so
+		// the scheduler doesn't resurrect or orphan processes past exit.
+		m.cancelStartAll()
 		// Ensure all processes are properly terminated
 		m.manager.StopAll()
 		return m, tea.Quit
@@ -316,6 +325,9 @@ func (m TableModel) handleRemoteLogsViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))):
 		m.remoteLogsView.Close()
+		// Stop any in-flight start-all before tearing everything down, so
+		// the scheduler doesn't resurrect or orphan processes past exit.
+		m.cancelStartAll()
 		m.manager.StopAll()
 		return m, tea.Quit
 	}
@@ -482,11 +494,39 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 				w.Status = worker.StatusStopped // oneshot finished successfully
 			case process.EventFailed:
 				w.Status = worker.StatusFailed
+				// This goroutine runs concurrently with Update (TableModel is
+				// copied per Update call), so it must not write m.statusMsg —
+				// that would be an unsynchronized write to a copy no one
+				// reads. Record the failure reason in the process's own log
+				// buffer instead, where the existing log viewer already
+				// surfaces it. Failures before any process exists (e.g. env
+				// resolution errors) have no buffer to write to and are
+				// dropped here — acceptable since those are also reported
+				// synchronously via m.statusMsg elsewhere (startWorker).
+				if p, ok := manager.GetProcess(ev.Name); ok {
+					p.LogBuffer.Write(fmt.Sprintf("[start-all] %s failed: %s %v", ev.Name, ev.Message, ev.Error))
+				}
 			}
 		}
 	}()
 
+	// Created here (not inside the closure below) so the cancel func can be
+	// stashed on the model and reached by stopAllWorkers / the quit paths
+	// while orchestration is still running. A narrow race remains: a starter
+	// goroutine already past its cancellation check when cancel fires will
+	// still finish that one step (e.g. the process it's mid-launch of stays
+	// up) before waitForDependency's next poll sees ctx.Done() and fails
+	// fast. Also, root.go's signal-handler goroutine holds the *initial*
+	// model value from before the program started, so it can never see this
+	// field once set during a run — that path is unaffected by this fix and
+	// still only calls manager.StopAll().
+	ctx, cancel := context.WithCancel(context.Background())
+	m.startAllCancel = cancel
+
 	return m, func() tea.Msg {
+		// Double-cancel (e.g. stopAllWorkers already fired, or orchestration
+		// finished normally) is safe — context.CancelFunc is idempotent.
+		defer cancel()
 		for _, ds := range discovered {
 			manager.StartWorker(ds.w, ds.script)
 		}
@@ -496,9 +536,8 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 			// Nothing consumes graph health after orchestration finishes (the
 			// graph itself is discarded), so cancel it here to stop those
 			// goroutines instead of leaking one health monitor per health-checked
-			// process on every start-all cycle.
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			// process on every start-all cycle. It also doubles as the
+			// cancellation signal for an interrupted start-all (z / quit).
 			sched.StartAll(ctx)
 		}
 		sched.CloseEvents()
@@ -507,7 +546,24 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 	}
 }
 
+// cancelStartAll cancels an in-flight startAllWorkers orchestration, if any,
+// and clears the stored cancel func. Pointer receiver so the field write
+// sticks on the model it's called on; callers in this file are TableModel
+// value-receiver methods, but their local m is addressable, so `m.cancelStartAll()`
+// implicitly takes its address and the blanked field is preserved in the m
+// each of them returns.
+func (m *TableModel) cancelStartAll() {
+	if m.startAllCancel != nil {
+		m.startAllCancel()
+		m.startAllCancel = nil
+	}
+}
+
 func (m TableModel) stopAllWorkers() (TableModel, tea.Cmd) {
+	// Stop an in-flight start-all orchestration first, so the scheduler
+	// doesn't keep launching dependents (or waiting on health checks) after
+	// StopAll below has already torn processes down.
+	m.cancelStartAll()
 	return m, func() tea.Msg {
 		m.manager.StopAll()
 		return allProcessesStoppedMsg{}
@@ -927,9 +983,28 @@ func (m TableModel) GetManager() *process.Manager {
 
 // saveState persists runtime selections. Best-effort: the TUI must not break
 // because the state file can't be written.
+//
+// Config-derived DevMode values are masked out before saving: cmd/root.go
+// seeds every config worker's DevMode from its `dev_mode:` config entry (or
+// the "remote-bindings" default), so without masking, opening and closing a
+// selector — even via esc, with no change made — would freeze that
+// config-derived value into the state file. state.Apply then treats saved
+// values as the user's most recent explicit choice, so a later edit to
+// `dev_mode:` in the config would be silently overridden forever. Only
+// genuine divergences from the current config are worth remembering. This is
+// self-healing: if a saved divergence later comes to equal a new config
+// value, masking drops it on the next save.
 func (m TableModel) saveState() {
 	if m.config == nil {
 		return
 	}
-	_ = state.Save(m.config.BaseDir, m.workers)
+	toSave := make([]*worker.Worker, len(m.workers))
+	for i, w := range m.workers {
+		wCopy := *w
+		if proc, exists := m.config.Processes[w.Name]; exists && wCopy.DevMode == proc.DevMode {
+			wCopy.DevMode = ""
+		}
+		toSave[i] = &wCopy
+	}
+	_ = state.Save(m.config.BaseDir, toSave)
 }

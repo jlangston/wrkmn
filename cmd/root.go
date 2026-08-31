@@ -184,6 +184,8 @@ func runApp(cmd *cobra.Command, args []string) {
 	// Restore runtime selections (dev mode, selected env) from prior sessions.
 	if saved, err := state.Load(cfg.BaseDir); err == nil {
 		state.Apply(saved, workers)
+	} else {
+		fmt.Fprintf(os.Stderr, "Warning: ignoring %s: %v\n", state.FileName, err)
 	}
 
 	if len(workers) == 0 {

@@ -289,6 +289,75 @@ func TestScheduler_WaitForDependency(t *testing.T) {
 		assert.Equal(t, context.Canceled, err)
 	})
 
+	t.Run("returns error when dependency stopped for started condition", func(t *testing.T) {
+		processes := map[string]config.Process{
+			"api": {Command: "npm"},
+			"db":  {Command: "postgres"},
+		}
+		graph := NewDependencyGraph(processes)
+		graph.UpdateState("db", StateStopped)
+
+		scheduler := NewScheduler(graph, nil)
+
+		dep := config.Dependency{
+			Process:   "db",
+			Condition: config.ConditionStarted,
+		}
+
+		start := time.Now()
+		err := scheduler.waitForDependency(context.Background(), dep)
+		elapsed := time.Since(start)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "dependency db stopped")
+		assert.Less(t, elapsed, time.Second, "should fail fast rather than polling to the 5-minute timeout")
+	})
+
+	t.Run("returns error when dependency stopped for healthy condition", func(t *testing.T) {
+		processes := map[string]config.Process{
+			"api": {Command: "npm"},
+			"db":  {Command: "postgres"},
+		}
+		graph := NewDependencyGraph(processes)
+		graph.UpdateState("db", StateStopped)
+
+		scheduler := NewScheduler(graph, nil)
+
+		dep := config.Dependency{
+			Process:   "db",
+			Condition: config.ConditionHealthy,
+		}
+
+		start := time.Now()
+		err := scheduler.waitForDependency(context.Background(), dep)
+		elapsed := time.Since(start)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "dependency db stopped")
+		assert.Less(t, elapsed, time.Second, "should fail fast rather than polling to the 5-minute timeout")
+	})
+
+	t.Run("returns error when dependency stopped for completed condition", func(t *testing.T) {
+		processes := map[string]config.Process{
+			"app":   {Command: "npm"},
+			"setup": {Command: "sh", Type: config.ProcessTypeOneshot},
+		}
+		graph := NewDependencyGraph(processes)
+		graph.UpdateState("setup", StateStopped)
+
+		scheduler := NewScheduler(graph, nil)
+
+		dep := config.Dependency{
+			Process:   "setup",
+			Condition: config.ConditionCompleted,
+		}
+
+		start := time.Now()
+		err := scheduler.waitForDependency(context.Background(), dep)
+		elapsed := time.Since(start)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "dependency setup stopped")
+		assert.Less(t, elapsed, time.Second, "should fail fast rather than polling to the 5-minute timeout")
+	})
+
 	t.Run("waits for healthy condition", func(t *testing.T) {
 		processes := map[string]config.Process{
 			"api": {Command: "npm"},

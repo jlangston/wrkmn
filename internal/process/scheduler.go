@@ -329,6 +329,9 @@ func (s *Scheduler) waitForDependency(ctx context.Context, dep config.Dependency
 				if depNode.State == StateFailed {
 					return fmt.Errorf("dependency %s failed", dep.Process)
 				}
+				if depNode.State == StateStopped {
+					return fmt.Errorf("dependency %s stopped", dep.Process)
+				}
 			case config.ConditionHealthy:
 				if depNode.Health == HealthHealthy {
 					return nil
@@ -336,12 +339,18 @@ func (s *Scheduler) waitForDependency(ctx context.Context, dep config.Dependency
 				if depNode.State == StateFailed {
 					return fmt.Errorf("dependency %s failed", dep.Process)
 				}
+				if depNode.State == StateStopped {
+					return fmt.Errorf("dependency %s stopped", dep.Process)
+				}
 			case config.ConditionCompleted:
 				if depNode.State == StateCompleted {
 					return nil
 				}
 				if depNode.State == StateFailed {
 					return fmt.Errorf("dependency %s failed", dep.Process)
+				}
+				if depNode.State == StateStopped {
+					return fmt.Errorf("dependency %s stopped", dep.Process)
 				}
 			}
 		}

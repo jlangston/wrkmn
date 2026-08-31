@@ -505,7 +505,16 @@ func (m *Manager) readLogs(reader io.Reader, buffer *CircularBuffer, prefix stri
 	}
 }
 
-// StartProcess starts a generic process from config
+// StartProcess starts a generic process from config.
+//
+// ctx governs the spawned command's lifetime via exec.CommandContext:
+// cancelling it kills the process, and that kill is recorded as a crash
+// (RunStateExited with a non-zero/-1 exit code), not a graceful stop. To
+// stop a process intentionally, use StopProcess, StopWorker, or StopAll
+// instead. Pass context.Background() when the process should outlive the
+// caller (e.g. it must keep running after the function that started it
+// returns) — a context tied to a shorter-lived operation will kill the
+// process, appearing as a crash, once that operation ends.
 func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Process, w *worker.Worker) (*Process, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
