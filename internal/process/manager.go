@@ -131,15 +131,18 @@ func (p *Process) Finished() time.Time {
 	return p.finished
 }
 
-// recordExit stores the outcome of cmd.Wait. killed marks an externally
-// requested stop (context cancelled) rather than a natural exit.
-func (p *Process) recordExit(waitErr error, killed bool) {
+// recordExit stores the outcome of cmd.Wait. It reads the killed flag
+// (set by markKilled before external signals) to determine if this was
+// an externally requested stop rather than a natural exit. Returns true
+// if the process was externally killed.
+func (p *Process) recordExit(waitErr error) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.finished = time.Now()
+	killed := p.killed
 	if killed {
 		p.runState = RunStateKilled
-		return
+		return true
 	}
 	p.runState = RunStateExited
 	p.exitErr = waitErr
@@ -151,6 +154,15 @@ func (p *Process) recordExit(waitErr error, killed bool) {
 	default:
 		p.exitCode = -1
 	}
+	return false
+}
+
+// markKilled marks this process as explicitly killed/stopped externally.
+// Must be called before sending signals to ensure superviseProcess sees the killed flag.
+func (p *Process) markKilled() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.killed = true
 }
 
 // Stop stops the process
@@ -213,16 +225,13 @@ func NewCircularBuffer(capacity int) *CircularBuffer {
 	}
 }
 
-// superviseProcess waits for the process to end, records its exit state, and
-// reflects the outcome on the worker's status. Externally requested stops
-// (StopWorker/StopProcess/StopAll) manage status themselves.
-func (m *Manager) superviseProcess(ctx context.Context, p *Process) {
+// superviseProcess waits for the process to end and records its exit state.
+// For natural exits, it reflects the outcome on the worker's status.
+// Externally requested stops (StopWorker/StopProcess/StopAll) set the killed flag
+// before signaling, so recordExit correctly distinguishes natural vs forced exits.
+func (m *Manager) superviseProcess(p *Process) {
 	waitErr := p.Cmd.Wait()
-	// Check if we explicitly requested to kill this process (set in Stop())
-	p.mu.RLock()
-	killed := p.killed
-	p.mu.RUnlock()
-	p.recordExit(waitErr, killed)
+	killed := p.recordExit(waitErr)
 	if killed {
 		return
 	}
@@ -325,7 +334,7 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 	go m.readLogs(stdout, logBuffer, "STDOUT")
 	go m.readLogs(stderr, logBuffer, "STDERR")
 
-	go m.superviseProcess(ctx, process)
+	go m.superviseProcess(process)
 
 	w.Status = worker.StatusRunning
 	return nil
@@ -339,6 +348,9 @@ func (m *Manager) StopWorker(workerName string) error {
 	if !exists {
 		return fmt.Errorf("worker %s is not running", workerName)
 	}
+
+	// Mark killed before sending signals so superviseProcess sees the killed flag
+	process.markKilled()
 
 	// Kill the entire process group to prevent orphaned processes
 	if process.Cmd.Process != nil {
@@ -391,6 +403,11 @@ func (m *Manager) StopAll() {
 		processes = append(processes, process)
 	}
 
+	// Mark all processes as killed before sending signals so superviseProcess sees the killed flag
+	for _, process := range processes {
+		process.markKilled()
+	}
+
 	// Send SIGTERM to all process groups
 	for _, process := range processes {
 		if process.Cmd != nil && process.Cmd.Process != nil {
@@ -415,8 +432,15 @@ func (m *Manager) StopAll() {
 		if process.Cancel != nil {
 			process.Cancel()
 		}
+		// Only update worker status if we explicitly killed this process (marked as killed before signals).
+		// If it exited naturally, superviseProcess already set the appropriate status.
 		if process.Worker != nil {
-			process.Worker.Status = worker.StatusStopped
+			process.mu.RLock()
+			wasKilled := process.killed
+			process.mu.RUnlock()
+			if wasKilled {
+				process.Worker.Status = worker.StatusStopped
+			}
 		}
 	}
 
@@ -527,7 +551,7 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 	go m.readLogs(stdout, logBuffer, "STDOUT")
 	go m.readLogs(stderr, logBuffer, "STDERR")
 
-	go m.superviseProcess(ctx, process)
+	go m.superviseProcess(process)
 
 	return process, nil
 }

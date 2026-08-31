@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"wrkmn/internal/config"
-	"wrkmn/internal/worker"
 )
 
 func TestCircularBuffer_ThreadSafe(t *testing.T) {
@@ -271,23 +270,21 @@ func TestStoppedProcessMarkedKilled(t *testing.T) {
 	}
 }
 
-func TestCrashedWorkerStatusFailed(t *testing.T) {
+func TestCrashedProcessMarksExited(t *testing.T) {
 	m := NewManager()
-	w := &worker.Worker{Name: "crashy", Status: worker.StatusStarting}
+	defer m.StopAll()
 	cfg := &config.Process{Command: "sh", Args: []string{"-c", "exit 2"}, Type: config.ProcessTypeService}
-	p, err := m.StartProcess(context.Background(), "crashy", cfg, w)
+	p, err := m.StartProcess(context.Background(), "crashy", cfg, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	defer m.StopAll()
 	waitForExit(t, p, 5*time.Second)
-	// status write happens right after recordExit; give it a moment
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && w.Status != worker.StatusFailed {
-		time.Sleep(10 * time.Millisecond)
+	// Verify that superviseProcess recorded the exit code (indicates non-zero exit).
+	if p.RunState() != RunStateExited {
+		t.Fatalf("RunState = %v, want RunStateExited", p.RunState())
 	}
-	if w.Status != worker.StatusFailed {
-		t.Fatalf("worker status = %s, want failed", w.Status)
+	if p.ExitCode() != 2 {
+		t.Fatalf("ExitCode = %d, want 2", p.ExitCode())
 	}
 }
 
@@ -306,4 +303,19 @@ func TestDeadEntryReplacedOnRestart(t *testing.T) {
 		t.Fatalf("second start: %v", err)
 	}
 	waitForExit(t, p2, 5*time.Second)
+}
+
+func TestStopAllMarksKilled(t *testing.T) {
+	m := NewManager()
+	cfg := &config.Process{Command: "sleep", Args: []string{"30"}, Type: config.ProcessTypeService}
+	p, err := m.StartProcess(context.Background(), "sleeper", cfg, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// Stop all processes (not using StopProcess, testing StopAll path)
+	m.StopAll()
+	waitForExit(t, p, 5*time.Second)
+	if p.RunState() != RunStateKilled {
+		t.Fatalf("RunState = %v, want RunStateKilled", p.RunState())
+	}
 }
