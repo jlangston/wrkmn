@@ -46,6 +46,33 @@ via a scaffolded `cf init` project (throwaway, deleted):
   read-only SQL over captured spans/logs). Noted as a follow-up opportunity
   for log/metrics integration.
 
+### Full-cycle validation (2026-10-19, cf 1.0.0-beta.10 scaffold)
+
+A second probe exercised the exact sequence wrkmn's engine performs, headless
+over raw CDP (not via Chrome):
+
+- `Debugger.setBreakpointByUrl` → breakpoint resolves (1 location) → a fetch
+  to the dev server pauses with the breakpoint in `hitBreakpoints` →
+  `Debugger.resume` → the request completes. **Full cycle passes.**
+- **Script URL shape:** user sources parse with ABSOLUTE FILESYSTEM paths
+  (`/abs/path/src/index.ts`), alongside Vite virtuals
+  (`\0virtual:cloudflare/worker-entry`) and `node:*` internals. Absolute
+  paths map directly to on-disk files — good for `source.go`. The served
+  source is Vite's SSR-transformed module (imports rewritten to
+  `__vite_ssr_import_N__`), but line numbers are preserved, so
+  line-addressed breakpoints against the on-disk file work as-is.
+- **Pause events report `reason: "other"`** even for breakpoint hits; the
+  engine must key on `hitBreakpoints`, not `reason`.
+- **REPL caveat:** module-level identifiers are renamed by the SSR transform
+  (`env` → `__vite_ssr_import_0__.env`), so `evaluateOnCallFrame` on
+  original-source identifiers can throw ReferenceError, and module bindings
+  do not appear as frame locals. Frame-local variables are unaffected.
+  Component 5 carries the consequence.
+- Not validated: Chrome DevTools itself driving the endpoint (no browser
+  automation available in-session). The endpoint advertises the official
+  hosted DevTools frontend (`devtools.devprod.cloudflare.dev`) in its
+  `/json` payload, and a manual check is one click on the `Debug:` URL.
+
 Also verified from Cloudflare docs:
 
 - `cf dev`/`cf build`/`cf deploy` read only `cloudflare.config.ts` — never
@@ -218,12 +245,19 @@ Hard requirement: in-TUI only, no browser path.
 - The CDP session/breakpoints/stepping/evaluation/source code is unchanged —
   the probe verified protocol compatibility (`Debugger.enable`,
   `scriptParsed`, `Runtime.enable` all behave as with wrangler).
-- Source mapping caveat: Vite serves transformed modules; script URLs may be
-  Vite-style (`/src/index.ts` or `file://` paths). `source.go`'s mapping gets
-  verified against the live smoke (mandatory gate below) and adjusted there
-  if paths differ — the spec does not guess beyond requiring the smoke to
-  demonstrate: breakpoint set in the TUI → request pauses → variables visible
-  → resume works.
+- Source mapping (validated 2026-10-19): user-source scripts parse with
+  absolute filesystem URLs and line numbers preserved by the SSR transform,
+  so `source.go` maps script URLs to on-disk files directly and
+  line-addressed breakpoints work against the original file. Two engine
+  adjustments are required:
+  1. Treat a pause as a breakpoint hit when `hitBreakpoints` is non-empty
+     (the Vite inspector reports `reason: "other"`).
+  2. REPL/variables: module-level identifiers are SSR-renamed
+     (`env` → `__vite_ssr_import_N__.env`). The console surfaces the
+     ReferenceError as-is (documented limitation for module bindings in v1);
+     frame locals work normally. A rename-aware evaluator is a follow-up.
+- The mandatory live smoke (below) still gates completion: breakpoint set in
+  the TUI → request pauses → variables visible → resume works.
 
 ### Component 6 — Preflight, validate, and messaging
 
