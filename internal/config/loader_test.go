@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -606,6 +607,25 @@ processes:
 		t.Fatal("expected error for invalid dev_mode, got nil")
 	}
 	assert.Contains(t, err.Error(), "invalid dev_mode")
+}
+
+func TestDevModeRemoteRejectedWithHint(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: cf
+    args: [dev]
+    type: worker
+    dev_mode: remote
+`)
+	_, err := NewLoader(path).Load()
+	if err == nil {
+		t.Fatal("dev_mode: remote should be rejected")
+	}
+	if !strings.Contains(err.Error(), "full-remote dev does not exist in the cf CLI") {
+		t.Fatalf("error lacks migration hint: %v", err)
+	}
 }
 
 func TestUnknownProcessTypeRejected(t *testing.T) {

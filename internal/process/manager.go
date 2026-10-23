@@ -24,7 +24,6 @@ import (
 //
 //	local           -> --inspector-port <p> --local   (debugger on)
 //	remote-bindings -> --inspector-port <p>            (debugger on; honors `remote: true` bindings)
-//	remote          -> --remote                        (code on edge; no inspector, debugger off)
 //
 // `--env <env>` is appended for any mode when env is non-empty. Returns nil when
 // there are no flags to add (so callers can append unconditionally).
@@ -34,14 +33,12 @@ func buildWranglerPassthrough(mode config.DevMode, inspectorPort int, env string
 	}
 
 	var flags []string
-	if mode != config.DevModeRemote && inspectorPort > 0 {
+	if inspectorPort > 0 {
 		flags = append(flags, "--inspector-port", strconv.Itoa(inspectorPort))
 	}
 	switch mode {
 	case config.DevModeLocal:
 		flags = append(flags, "--local")
-	case config.DevModeRemote:
-		flags = append(flags, "--remote")
 	}
 	if env != "" && env != "production" {
 		flags = append(flags, "--env", env)

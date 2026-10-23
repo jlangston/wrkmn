@@ -13,17 +13,14 @@ import (
 )
 
 type devModeOption struct {
-	mode          config.DevMode
-	label         string
-	debuggable    bool
-	touchesRemote bool
-	desc          string
+	mode  config.DevMode
+	label string
+	desc  string
 }
 
 var devModeOptions = []devModeOption{
-	{config.DevModeLocal, "local", true, false, "All bindings local. Debugger works."},
-	{config.DevModeRemoteBindings, "remote-bindings", true, true, "Code local; honors remote: true bindings. Debugger works."},
-	{config.DevModeRemote, "remote", false, true, "Code on Cloudflare's edge. No breakpoint debugging."},
+	{config.DevModeLocal, "local", "All bindings local (cf dev --local)."},
+	{config.DevModeRemoteBindings, "remote-bindings", "Code local; remote bindings honored (plain cf dev). Default."},
 }
 
 // ModeSelector displays the available dev modes for a worker.
@@ -96,21 +93,13 @@ func (s *ModeSelector) View() string {
 	descStyle := lipgloss.NewStyle().Foreground(t.Secondary)
 
 	for i, opt := range devModeOptions {
-		debug := "debug ✓"
-		if !opt.debuggable {
-			debug = "debug ✗"
-		}
-		remote := ""
-		if opt.touchesRemote {
-			remote = " • real resources"
-		}
 		marker := "  "
 		if opt.mode == s.worker.EffectiveDevMode() {
 			marker = "✓ "
 		}
-		title := fmt.Sprintf("%s%s  [%s%s]", marker, opt.label, debug, remote)
+		title := fmt.Sprintf("%s%s", marker, opt.label)
 		if i == s.cursor {
-			title = fmt.Sprintf("> %s  [%s%s]", opt.label, debug, remote)
+			title = fmt.Sprintf("> %s", opt.label)
 			lines = append(lines, selectedStyle.Render(title))
 		} else {
 			lines = append(lines, normalStyle.Render(title))

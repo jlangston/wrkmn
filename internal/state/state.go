@@ -80,7 +80,7 @@ func Apply(states map[string]WorkerState, workers []*worker.Worker) {
 			continue
 		}
 		switch config.DevMode(st.DevMode) {
-		case config.DevModeLocal, config.DevModeRemoteBindings, config.DevModeRemote:
+		case config.DevModeLocal, config.DevModeRemoteBindings:
 			w.DevMode = config.DevMode(st.DevMode)
 		}
 		if st.SelectedEnv != "" {

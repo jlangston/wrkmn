@@ -259,13 +259,9 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
-		return m.startWorkerGuarded("dev")
+		return m.startWorker("dev")
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("D"))):
-		if m.cursor < len(m.workers) && !m.workers[m.cursor].SupportsDebugging() {
-			m.statusMsg = "Debugging unavailable in full-remote mode (code runs on Cloudflare's edge)"
-			return m, nil
-		}
 		return m.enterDebug()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
@@ -275,7 +271,7 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.stopWorker()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("a"))):
-		return m.startAllWorkersGuarded()
+		return m.startAllWorkers()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("z"))):
 		return m.stopAllWorkers()
@@ -623,43 +619,6 @@ func (m TableModel) showModeSelector() (TableModel, tea.Cmd) {
 		m.modeSelector.Show(m.workers[m.cursor])
 	}
 	return m, nil
-}
-
-// startWorkerGuarded confirms before starting a full-remote worker, otherwise starts immediately.
-func (m TableModel) startWorkerGuarded(script string) (TableModel, tea.Cmd) {
-	if m.cursor >= len(m.workers) {
-		return m, nil
-	}
-	w := m.workers[m.cursor]
-	if w.EffectiveDevMode() == config.DevModeRemote {
-		m.confirm.Show(
-			fmt.Sprintf("Start %q in FULL-REMOTE mode? Code runs on Cloudflare's edge and bindings hit real resources. Debugging is unavailable.", w.Name),
-			func(mm TableModel) (TableModel, tea.Cmd) { return mm.startWorker(script) },
-		)
-		return m, nil
-	}
-	return m.startWorker(script)
-}
-
-// startAllWorkersGuarded shows one confirmation listing every worker that would start in full-remote mode.
-func (m TableModel) startAllWorkersGuarded() (TableModel, tea.Cmd) {
-	var remote []string
-	for _, w := range m.workers {
-		if w.Status == worker.StatusRunning {
-			continue
-		}
-		if w.EffectiveDevMode() == config.DevModeRemote {
-			remote = append(remote, w.Name)
-		}
-	}
-	if len(remote) > 0 {
-		m.confirm.Show(
-			fmt.Sprintf("These workers will start in FULL-REMOTE mode (code on edge, real resources, no debugging): %s. Continue?", strings.Join(remote, ", ")),
-			func(mm TableModel) (TableModel, tea.Cmd) { return mm.startAllWorkers() },
-		)
-		return m, nil
-	}
-	return m.startAllWorkers()
 }
 
 func (m TableModel) View() string {

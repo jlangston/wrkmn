@@ -47,7 +47,7 @@ func TestApplyOverridesDefaultsAndIgnoresBogusModes(t *testing.T) {
 	}
 	Apply(map[string]WorkerState{
 		"api": {DevMode: "local", SelectedEnv: "staging"},
-		"web": {DevMode: "not-a-mode"},
+		"web": {DevMode: "remote"}, // removed mode — must be ignored
 	}, workers)
 	if workers[0].DevMode != config.DevModeLocal || workers[0].SelectedEnv != "staging" {
 		t.Fatalf("api = %+v, want saved selections applied", workers[0])

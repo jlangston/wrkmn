@@ -169,10 +169,10 @@ func (l *Loader) validate(cfg *Config) error {
 	// Validate dev_mode
 	for name, proc := range cfg.Processes {
 		switch proc.DevMode {
-		case "", DevModeLocal, DevModeRemoteBindings, DevModeRemote:
+		case "", DevModeLocal, DevModeRemoteBindings:
 			// Valid (empty defaults later)
 		default:
-			return fmt.Errorf("process %q: invalid dev_mode %q (must be local, remote-bindings, or remote)", name, proc.DevMode)
+			return fmt.Errorf("process %q: invalid dev_mode %q (must be local or remote-bindings; full-remote dev does not exist in the cf CLI)", name, proc.DevMode)
 		}
 	}
 

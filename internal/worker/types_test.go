@@ -21,7 +21,6 @@ func TestSupportsDebugging(t *testing.T) {
 		{"", true},
 		{config.DevModeLocal, true},
 		{config.DevModeRemoteBindings, true},
-		{config.DevModeRemote, false},
 	}
 	for _, c := range cases {
 		w := &Worker{DevMode: c.mode}

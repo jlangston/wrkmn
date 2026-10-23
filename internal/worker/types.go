@@ -91,10 +91,10 @@ func (w *Worker) EffectiveDevMode() config.DevMode {
 	return w.DevMode
 }
 
-// SupportsDebugging reports whether breakpoint debugging is available in the
-// current dev mode. Full-remote runs on the edge, so the local inspector cannot attach.
+// SupportsDebugging reports whether breakpoint debugging is available. Both
+// cf dev modes run code locally, so this is always true.
 func (w *Worker) SupportsDebugging() bool {
-	return w.EffectiveDevMode() != config.DevModeRemote
+	return true
 }
 
 // IsCloudflareWorker returns true if this worker has a wrangler.toml configuration
