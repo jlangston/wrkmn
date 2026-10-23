@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -12,41 +13,53 @@ import (
 	"syscall"
 	"time"
 
+	"wrkmn/internal/cfproject"
 	"wrkmn/internal/config"
 	"wrkmn/internal/worker"
 )
 
-// buildWranglerPassthrough returns the args to append after a `bun run <script>`
-// (or configured command) invocation. They are placed behind a single `--`
-// separator so they reach the underlying `wrangler dev` rather than bun/npm.
+// buildCfDevArgs returns the arguments appended to a worker launch command.
+// There is no "--" separator: `cf dev` takes these flags directly, and
+// `bun run <script>` forwards trailing args to the script it runs.
 //
-// Mode mapping:
-//
-//	local           -> --inspector-port <p> --local   (debugger on)
-//	remote-bindings -> --inspector-port <p>            (debugger on; honors `remote: true` bindings)
-//
-// `--env <env>` is appended for any mode when env is non-empty. Returns nil when
-// there are no flags to add (so callers can append unconditionally).
-func buildWranglerPassthrough(mode config.DevMode, inspectorPort int, env string) []string {
-	if mode == "" {
-		mode = config.DevModeRemoteBindings
+//	local           -> --local        (all bindings simulated locally)
+//	remote-bindings -> (nothing; cf dev's default)
+//	mode != ""      -> --mode <mode>  (selects the cloudflare.config.ts mode)
+func buildCfDevArgs(devMode config.DevMode, mode string) []string {
+	var args []string
+	if devMode == config.DevModeLocal {
+		args = append(args, "--local")
 	}
+	if mode != "" {
+		args = append(args, "--mode", mode)
+	}
+	return args
+}
 
-	var flags []string
-	if inspectorPort > 0 {
-		flags = append(flags, "--inspector-port", strconv.Itoa(inspectorPort))
+// applyBannerLine feeds one raw stdout line through the cf dev banner parser
+// and records discovered URLs on the worker. Writes follow the existing
+// unsynchronized Worker-field pattern (parked debt; see Status).
+func applyBannerLine(w *worker.Worker, line string) {
+	if w == nil {
+		return
 	}
-	switch mode {
-	case config.DevModeLocal:
-		flags = append(flags, "--local")
+	kind, u, ok := cfproject.ParseBannerLine(line)
+	if !ok {
+		return
 	}
-	if env != "" && env != "production" {
-		flags = append(flags, "--env", env)
+	switch kind {
+	case cfproject.BannerLocal:
+		w.DevServerURL = u
+		if parsed, err := url.Parse(u); err == nil {
+			if p := parsed.Port(); p != "" {
+				if n, err := strconv.Atoi(p); err == nil {
+					w.Port = n
+				}
+			}
+		}
+	case cfproject.BannerDebug:
+		w.DebugURL = u
 	}
-	if len(flags) == 0 {
-		return nil
-	}
-	return append([]string{"--"}, flags...)
 }
 
 type Manager struct {
@@ -72,7 +85,6 @@ type Process struct {
 	Name      string          // Process name (from config or worker name)
 	Worker    *worker.Worker  // nil for non-worker processes
 	Config    *config.Process // nil for legacy worker-only processes
-	Script    string          // package.json script for StartWorker-launched processes ("" otherwise)
 	Cmd       *exec.Cmd
 	Cancel    context.CancelFunc
 	LogBuffer *CircularBuffer
@@ -314,7 +326,7 @@ func (cb *CircularBuffer) GetLines() []string {
 	return result
 }
 
-func (m *Manager) StartWorker(w *worker.Worker, script string) error {
+func (m *Manager) StartWorker(w *worker.Worker) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -325,16 +337,10 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 		delete(m.processes, w.Name) // dead entry from a previous run — replace it
 	}
 
-	_, exists := w.Scripts[script]
-	if !exists {
-		return fmt.Errorf("script %s not found for worker %s", script, w.Name)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 
-	runArgs := []string{"run", script}
-	runArgs = append(runArgs, buildWranglerPassthrough(w.DevMode, w.InspectorPort, w.SelectedMode)...)
-	cmd := exec.CommandContext(ctx, "bun", runArgs...)
+	runArgs := append([]string{"dev"}, buildCfDevArgs(w.DevMode, w.SelectedMode)...)
+	cmd := exec.CommandContext(ctx, "cf", runArgs...)
 	cmd.Dir = w.Path
 	// Set process group to handle signals properly
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -360,7 +366,6 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 	process := &Process{
 		Name:      w.Name,
 		Worker:    w,
-		Script:    script,
 		Cmd:       cmd,
 		Cancel:    cancel,
 		LogBuffer: logBuffer,
@@ -375,8 +380,8 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 		return fmt.Errorf("failed to start worker: %w", err)
 	}
 
-	go m.readLogs(stdout, logBuffer, "STDOUT")
-	go m.readLogs(stderr, logBuffer, "STDERR")
+	go m.readLogs(stdout, logBuffer, "STDOUT", w)
+	go m.readLogs(stderr, logBuffer, "STDERR", w)
 
 	go m.superviseProcess(process)
 
@@ -494,10 +499,12 @@ func (m *Manager) StopAll() {
 	m.restartTries = make(map[string]int)
 }
 
-func (m *Manager) readLogs(reader io.Reader, buffer *CircularBuffer, prefix string) {
+func (m *Manager) readLogs(reader io.Reader, buffer *CircularBuffer, prefix string, w *worker.Worker) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
-		line := fmt.Sprintf("[%s] %s: %s", time.Now().Format("15:04:05"), prefix, scanner.Text())
+		raw := scanner.Text()
+		applyBannerLine(w, raw)
+		line := fmt.Sprintf("[%s] %s: %s", time.Now().Format("15:04:05"), prefix, raw)
 		buffer.Write(line)
 	}
 }
@@ -525,23 +532,19 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 
 	ctx, cancel := context.WithCancel(ctx)
 
-	// Build command with args. For worker processes, forward wrangler passthrough
-	// flags (inspector port, dev mode, env) so wrangler dev receives them.
+	// Build command with args. For worker processes, forward cf dev flags
+	// (dev mode, selected mode) so cf dev receives them.
 	args := append([]string{}, cfg.Args...)
 	if cfg.Type == config.ProcessTypeWorker {
 		mode := cfg.DevMode
-		inspectorPort := cfg.InspectorPort
-		env := ""
+		selectedMode := ""
 		if w != nil {
 			if w.DevMode != "" {
 				mode = w.DevMode
 			}
-			env = w.SelectedMode
-			if w.InspectorPort > 0 {
-				inspectorPort = w.InspectorPort
-			}
+			selectedMode = w.SelectedMode
 		}
-		args = append(args, buildWranglerPassthrough(mode, inspectorPort, env)...)
+		args = append(args, buildCfDevArgs(mode, selectedMode)...)
 	}
 	var cmd *exec.Cmd
 	if len(args) > 0 {
@@ -603,8 +606,8 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 		return nil, fmt.Errorf("failed to start process: %w", err)
 	}
 
-	go m.readLogs(stdout, logBuffer, "STDOUT")
-	go m.readLogs(stderr, logBuffer, "STDERR")
+	go m.readLogs(stdout, logBuffer, "STDOUT", w)
+	go m.readLogs(stderr, logBuffer, "STDERR", w)
 
 	go m.superviseProcess(process)
 

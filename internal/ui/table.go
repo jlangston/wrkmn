@@ -259,7 +259,7 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
-		return m.startWorker("dev")
+		return m.startWorker()
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("D"))):
 		return m.enterDebug()
@@ -332,7 +332,7 @@ func (m TableModel) handleRemoteLogsViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd
 	return m, cmd
 }
 
-func (m TableModel) startWorker(script string) (TableModel, tea.Cmd) {
+func (m TableModel) startWorker() (TableModel, tea.Cmd) {
 	if m.cursor >= len(m.workers) {
 		return m, nil
 	}
@@ -367,9 +367,9 @@ func (m TableModel) startWorker(script string) (TableModel, tea.Cmd) {
 		}
 	}
 
-	// Regular discovered worker with scripts
+	// Regular discovered worker: always run `cf dev`.
 	return m, func() tea.Msg {
-		err := m.manager.StartWorker(w, script)
+		err := m.manager.StartWorker(w)
 		return processStartedMsg{workerName: workerName, err: err}
 	}
 }
@@ -402,8 +402,7 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 	// processes go through the scheduler so depends_on ordering, health
 	// checks, and oneshot completion hold.
 	type discoveredStart struct {
-		w      *worker.Worker
-		script string
+		w *worker.Worker
 	}
 
 	var discovered []discoveredStart
@@ -426,14 +425,8 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 		if w.Status == worker.StatusRunning {
 			continue
 		}
-		script := "dev"
-		if !w.HasScript("dev") && w.HasScript("start") {
-			script = "start"
-		}
-		if w.HasScript(script) {
-			w.Status = worker.StatusStarting
-			discovered = append(discovered, discoveredStart{w: w, script: script})
-		}
+		w.Status = worker.StatusStarting
+		discovered = append(discovered, discoveredStart{w: w})
 	}
 
 	if len(discovered) == 0 && len(configProcs) == 0 {
@@ -524,7 +517,7 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 		// finished normally) is safe — context.CancelFunc is idempotent.
 		defer cancel()
 		for _, ds := range discovered {
-			manager.StartWorker(ds.w, ds.script)
+			manager.StartWorker(ds.w)
 		}
 		if len(configProcs) > 0 {
 			// Health monitors (and other startup-scoped waits) are gated on this

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"wrkmn/internal/config"
+	"wrkmn/internal/worker"
 )
 
 func TestCircularBuffer_ThreadSafe(t *testing.T) {
@@ -416,5 +417,46 @@ func TestKilledProcessNotRestarted(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if _, exists := m.GetProcess("sleeper"); exists {
 		t.Fatal("killed process was restarted")
+	}
+}
+
+func TestBannerParsingPopulatesWorkerURLs(t *testing.T) {
+	m := NewManager()
+	w := &worker.Worker{Name: "bannered", Status: worker.StatusStarting}
+	cfg := &config.Process{
+		Command: "sh",
+		Args: []string{"-c",
+			`printf '  \xe2\x9e\x9c  Local:   http://localhost:8123/\n  \xe2\x9e\x9c  Debug:   http://localhost:8123/__debug\n'; sleep 30`},
+		Type: config.ProcessTypeWorker,
+	}
+	p, err := m.StartProcess(context.Background(), "bannered", cfg, w)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.StopAll()
+
+	// Poll the process's LogBuffer rather than w.Port/w.DebugURL directly.
+	// applyBannerLine writes those Worker fields unsynchronized (the same
+	// accepted pattern as Status — see its doc comment), so busy-polling them
+	// from this goroutine races the log-reader goroutine under -race.
+	// LogBuffer.Write/GetLines are mutex-guarded, and the writer calls
+	// applyBannerLine(w, raw) before buffer.Write(line) on each line, so
+	// observing the Debug line here via the buffer's lock establishes a real
+	// happens-before edge for w's fields too — safe to read once this
+	// resolves.
+	deadline := time.Now().Add(5 * time.Second)
+	var sawDebugLine bool
+	for time.Now().Before(deadline) {
+		if strings.Contains(strings.Join(p.LogBuffer.GetLines(), "\n"), "Debug:") {
+			sawDebugLine = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !sawDebugLine {
+		t.Fatalf("banner lines never logged: lines=%v", p.LogBuffer.GetLines())
+	}
+	if w.DebugURL == "" || w.Port != 8123 {
+		t.Fatalf("banner not parsed: Port=%d DevServerURL=%q DebugURL=%q", w.Port, w.DevServerURL, w.DebugURL)
 	}
 }
