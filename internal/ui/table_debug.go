@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -11,8 +12,9 @@ import (
 )
 
 // inspectorWaitTimeout bounds how long we wait for a worker's V8 inspector
-// target to appear after entering debug mode.
-const inspectorWaitTimeout = 10 * time.Second
+// target to appear after entering debug mode. Cold Vite starts can take
+// several seconds before the dev-server banner (and its Debug URL) prints.
+const inspectorWaitTimeout = 30 * time.Second
 
 // debugConnectedMsg reports the result of attaching to a worker's inspector.
 type debugConnectedMsg struct {
@@ -29,8 +31,9 @@ type debugEventMsg struct {
 type debugClosedMsg struct{}
 
 // enterDebug attaches the in-TUI debugger to the selected worker. It validates
-// the worker is a running Cloudflare worker with a known inspector port, builds
-// the debug session/components, and kicks off an async connect.
+// the worker is a running Cloudflare worker, builds the debug session/
+// components, and kicks off an async connect via the cf dev debug endpoint
+// (falling back to a /json port scan).
 func (m TableModel) enterDebug() (TableModel, tea.Cmd) {
 	if m.cursor >= len(m.workers) {
 		return m, nil
@@ -39,10 +42,6 @@ func (m TableModel) enterDebug() (TableModel, tea.Cmd) {
 
 	if !w.IsCloudflareWorker() {
 		m.statusMsg = "Debug: not a Cloudflare worker"
-		return m, nil
-	}
-	if w.InspectorPort == 0 {
-		m.statusMsg = "Debug: no inspector_port configured for " + w.Name
 		return m, nil
 	}
 	if _, running := m.manager.GetProcess(w.Name); !running {
@@ -66,13 +65,16 @@ func (m TableModel) enterDebug() (TableModel, tea.Cmd) {
 	m.statusMsg = "Debug: attaching to " + w.Name + "..."
 
 	name := w.Name
-	port := w.InspectorPort
+	debugURL := func() string { return w.DebugURL }
 
 	return m, func() tea.Msg {
-		disc := debug.NewInspectorDiscovery(port)
-		target, err := disc.WaitForTarget(inspectorWaitTimeout)
+		wsURL, err := debug.DiscoverWorkerWS(context.Background(), name, debugURL, debug.DefaultFallbackPorts, inspectorWaitTimeout)
 		if err != nil {
 			return debugConnectedMsg{worker: name, err: err}
+		}
+		target := &debug.InspectorTarget{
+			Title:                "Cloudflare Worker",
+			WebSocketDebuggerURL: wsURL,
 		}
 		if err := session.Connect(target); err != nil {
 			return debugConnectedMsg{worker: name, err: err}

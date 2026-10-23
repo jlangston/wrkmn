@@ -265,6 +265,12 @@ func (s *Session) handleEvent(method string, params map[string]any) {
 func (s *Session) handlePaused(params map[string]any) {
 	reason := PauseReason(getString(params, "reason"))
 
+	// The cf/Vite inspector reports reason "other" even for breakpoint hits;
+	// hitBreakpoints is the authoritative signal (verified 2026-10-19).
+	if hits, _ := params["hitBreakpoints"].([]any); len(hits) > 0 {
+		reason = PauseReasonBreakpoint
+	}
+
 	// Parse call frames
 	rawFrames, _ := params["callFrames"].([]any)
 	frames := make([]CallFrame, 0, len(rawFrames))

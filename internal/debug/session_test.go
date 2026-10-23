@@ -219,3 +219,31 @@ func TestSessionState_GetAllScripts_ReturnsCopy(t *testing.T) {
 	scripts2 := state.GetAllScripts()
 	assert.Len(t, scripts2, 2)
 }
+
+func TestHandlePausedHitBreakpointsOverridesReason(t *testing.T) {
+	s := NewSession()
+	// The Vite-plugin inspector reports reason "other" on breakpoint hits
+	// (verified 2026-10-19); hitBreakpoints is the authoritative signal.
+	s.handlePaused(map[string]any{
+		"reason":         "other",
+		"hitBreakpoints": []any{"1:4:0:/src/index.ts"},
+		"callFrames":     []any{},
+	})
+	ev := <-s.Events()
+	pe, ok := ev.Data.(PausedEvent)
+	if !ok {
+		t.Fatalf("event data %T", ev.Data)
+	}
+	if pe.Reason != PauseReasonBreakpoint {
+		t.Fatalf("Reason = %q, want breakpoint", pe.Reason)
+	}
+}
+
+func TestHandlePausedPlainOtherKeepsReason(t *testing.T) {
+	s := NewSession()
+	s.handlePaused(map[string]any{"reason": "other", "callFrames": []any{}})
+	ev := <-s.Events()
+	if pe := ev.Data.(PausedEvent); pe.Reason != PauseReasonOther {
+		t.Fatalf("Reason = %q, want other", pe.Reason)
+	}
+}
