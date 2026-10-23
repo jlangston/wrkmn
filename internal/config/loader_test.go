@@ -695,3 +695,64 @@ processes:
 		t.Fatalf("valid oneshot config rejected: %v", err)
 	}
 }
+
+func TestModesDefaultForWorkers(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: cf
+    args: [dev]
+    type: worker
+`)
+	cfg, err := NewLoader(path).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got := cfg.Processes["api"].Modes
+	if len(got) != 2 || got[0] != "development" || got[1] != "production" {
+		t.Fatalf("Modes = %v, want default [development production]", got)
+	}
+}
+
+func TestModesExplicitAndValidated(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: cf
+    args: [dev]
+    type: worker
+    modes: [development, staging, production]
+`)
+	cfg, err := NewLoader(path).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Processes["api"].Modes) != 3 {
+		t.Fatalf("Modes = %v", cfg.Processes["api"].Modes)
+	}
+
+	bad := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: cf
+    type: worker
+    modes: [development, development]
+`)
+	if _, err := NewLoader(bad).Load(); err == nil {
+		t.Fatal("duplicate modes should be rejected")
+	}
+	empty := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: cf
+    type: worker
+    modes: ["", staging]
+`)
+	if _, err := NewLoader(empty).Load(); err == nil {
+		t.Fatal("empty mode string should be rejected")
+	}
+}

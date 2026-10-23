@@ -49,6 +49,13 @@ type Process struct {
 	LogPrefix     string            `yaml:"log_prefix,omitempty"`
 	Type          ProcessType       `yaml:"type,omitempty"`
 
+	// Modes a worker's cloudflare.config.ts function accepts (cf dev --mode).
+	// Defaults to [development, production] for worker-type processes.
+	Modes []string `yaml:"modes,omitempty"`
+	// AccountID for remote operations (log tailing). Optional; falls back to
+	// Build Output and then the CLOUDFLARE_ACCOUNT_ID environment variable.
+	AccountID string `yaml:"account_id,omitempty"`
+
 	// Internal tracking (not from YAML)
 	Source ProcessSource `yaml:"-"`
 }

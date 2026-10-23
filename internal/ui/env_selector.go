@@ -11,7 +11,7 @@ import (
 	"wrkmn/internal/worker"
 )
 
-// EnvSelector displays available environments for a worker
+// EnvSelector displays available modes for a worker
 type EnvSelector struct {
 	visible bool
 	worker  *worker.Worker
@@ -19,18 +19,18 @@ type EnvSelector struct {
 	width   int
 	height  int
 
-	// Callback when environment is selected
+	// Callback when mode is selected
 	onSelect func(w *worker.Worker, env string)
 }
 
-// NewEnvSelector creates a new environment selector popup
+// NewEnvSelector creates a new mode selector popup
 func NewEnvSelector() *EnvSelector {
 	return &EnvSelector{}
 }
 
 // Show displays the popup for the given worker
 func (e *EnvSelector) Show(w *worker.Worker) {
-	if w == nil || len(w.Environments) == 0 {
+	if w == nil || len(w.Modes) == 0 {
 		return
 	}
 
@@ -39,8 +39,8 @@ func (e *EnvSelector) Show(w *worker.Worker) {
 	e.cursor = 0
 
 	// Find current selection
-	for i, env := range w.Environments {
-		if env == w.SelectedEnv {
+	for i, env := range w.Modes {
+		if env == w.SelectedMode {
 			e.cursor = i
 			break
 		}
@@ -63,20 +63,20 @@ func (e *EnvSelector) SetSize(width, height int) {
 	e.height = height
 }
 
-// SetOnSelect sets the callback for when an environment is selected
+// SetOnSelect sets the callback for when a mode is selected
 func (e *EnvSelector) SetOnSelect(fn func(w *worker.Worker, env string)) {
 	e.onSelect = fn
 }
 
-// SelectedEnv returns the currently highlighted environment
-func (e *EnvSelector) SelectedEnv() string {
-	if e.worker == nil || len(e.worker.Environments) == 0 {
+// SelectedMode returns the currently highlighted mode
+func (e *EnvSelector) SelectedMode() string {
+	if e.worker == nil || len(e.worker.Modes) == 0 {
 		return ""
 	}
-	if e.cursor >= len(e.worker.Environments) {
-		return e.worker.Environments[0]
+	if e.cursor >= len(e.worker.Modes) {
+		return e.worker.Modes[0]
 	}
-	return e.worker.Environments[e.cursor]
+	return e.worker.Modes[e.cursor]
 }
 
 // Update handles key events for the popup
@@ -93,7 +93,7 @@ func (e *EnvSelector) Update(msg tea.Msg) tea.Cmd {
 			return nil
 
 		case "j", "down":
-			if e.cursor < len(e.worker.Environments)-1 {
+			if e.cursor < len(e.worker.Modes)-1 {
 				e.cursor++
 			}
 
@@ -106,12 +106,12 @@ func (e *EnvSelector) Update(msg tea.Msg) tea.Cmd {
 			e.cursor = 0
 
 		case "G":
-			e.cursor = len(e.worker.Environments) - 1
+			e.cursor = len(e.worker.Modes) - 1
 
 		case "enter":
-			if len(e.worker.Environments) > 0 {
-				selectedEnv := e.worker.Environments[e.cursor]
-				e.worker.SelectedEnv = selectedEnv
+			if len(e.worker.Modes) > 0 {
+				selectedEnv := e.worker.Modes[e.cursor]
+				e.worker.SelectedMode = selectedEnv
 				if e.onSelect != nil {
 					e.onSelect(e.worker, selectedEnv)
 				}
@@ -134,15 +134,15 @@ func (e *EnvSelector) View() string {
 
 	// Calculate dimensions
 	overlayWidth := min(50, e.width-4)
-	overlayHeight := min(len(e.worker.Environments)+8, e.height-4)
+	overlayHeight := min(len(e.worker.Modes)+8, e.height-4)
 
 	// Header
 	header := lipgloss.NewStyle().
 		Foreground(t.Primary).
 		Bold(true).
-		Render(fmt.Sprintf("Select Environment • %s", e.worker.Name))
+		Render(fmt.Sprintf("Select Mode • %s", e.worker.Name))
 
-	// Content - environment list
+	// Content - mode list
 	content := e.renderEnvList(overlayWidth-4, overlayHeight-6)
 
 	// Footer
@@ -170,10 +170,10 @@ func (e *EnvSelector) View() string {
 }
 
 func (e *EnvSelector) renderEnvList(width, height int) string {
-	if e.worker == nil || len(e.worker.Environments) == 0 {
+	if e.worker == nil || len(e.worker.Modes) == 0 {
 		return lipgloss.NewStyle().
 			Foreground(theme.Current.Secondary).
-			Render("No environments configured")
+			Render("No modes configured")
 	}
 
 	t := theme.Current
@@ -195,9 +195,9 @@ func (e *EnvSelector) renderEnvList(width, height int) string {
 	accountStyle := lipgloss.NewStyle().
 		Foreground(t.Secondary)
 
-	for i, env := range e.worker.Environments {
-		// Get account ID for this environment
-		accountID := e.worker.GetAccountIDForEnv(env)
+	for i, env := range e.worker.Modes {
+		// Account ID is per-worker, not per-mode.
+		accountID := e.worker.AccountID
 		accountSuffix := ""
 		if accountID != "" {
 			// Truncate long account IDs
@@ -209,7 +209,7 @@ func (e *EnvSelector) renderEnvList(width, height int) string {
 
 		// Mark current selection
 		currentMarker := "  "
-		if env == e.worker.SelectedEnv {
+		if env == e.worker.SelectedMode {
 			currentMarker = currentStyle.Render("✓ ")
 		}
 
@@ -230,7 +230,7 @@ func (e *EnvSelector) renderEnvList(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-// EnvSelectedMsg is sent when an environment is selected
+// EnvSelectedMsg is sent when a mode is selected
 type EnvSelectedMsg struct {
 	Worker      *worker.Worker
 	Environment string

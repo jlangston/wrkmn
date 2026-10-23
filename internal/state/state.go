@@ -1,5 +1,5 @@
 // Package state persists per-worker runtime selections (dev mode, selected
-// env) across wrkmn sessions in a .wrkmn-state.json next to the config file.
+// mode) across wrkmn sessions in a .wrkmn-state.json next to the config file.
 // The file is a convenience cache: losing it only loses UI selections.
 package state
 
@@ -18,8 +18,10 @@ const FileName = ".wrkmn-state.json"
 
 // WorkerState holds the runtime selections worth keeping for one worker.
 type WorkerState struct {
-	DevMode     string `json:"dev_mode,omitempty"`
-	SelectedEnv string `json:"selected_env,omitempty"`
+	DevMode      string `json:"dev_mode,omitempty"`
+	SelectedMode string `json:"selected_mode,omitempty"`
+	// LegacySelectedEnv migrates pre-cutover state files; read-only.
+	LegacySelectedEnv string `json:"selected_env,omitempty"`
 }
 
 type fileFormat struct {
@@ -42,6 +44,13 @@ func Load(baseDir string) (map[string]WorkerState, error) {
 	if f.Workers == nil {
 		f.Workers = map[string]WorkerState{}
 	}
+	for name, st := range f.Workers {
+		if st.SelectedMode == "" && st.LegacySelectedEnv != "" {
+			st.SelectedMode = st.LegacySelectedEnv
+		}
+		st.LegacySelectedEnv = ""
+		f.Workers[name] = st
+	}
 	return f.Workers, nil
 }
 
@@ -50,12 +59,12 @@ func Load(baseDir string) (map[string]WorkerState, error) {
 func Save(baseDir string, workers []*worker.Worker) error {
 	f := fileFormat{Workers: map[string]WorkerState{}}
 	for _, w := range workers {
-		if w.DevMode == "" && w.SelectedEnv == "" {
+		if w.DevMode == "" && w.SelectedMode == "" {
 			continue
 		}
 		f.Workers[w.Name] = WorkerState{
-			DevMode:     string(w.DevMode),
-			SelectedEnv: w.SelectedEnv,
+			DevMode:      string(w.DevMode),
+			SelectedMode: w.SelectedMode,
 		}
 	}
 	data, err := json.MarshalIndent(f, "", "  ")
@@ -83,8 +92,8 @@ func Apply(states map[string]WorkerState, workers []*worker.Worker) {
 		case config.DevModeLocal, config.DevModeRemoteBindings:
 			w.DevMode = config.DevMode(st.DevMode)
 		}
-		if st.SelectedEnv != "" {
-			w.SelectedEnv = st.SelectedEnv
+		if st.SelectedMode != "" {
+			w.SelectedMode = st.SelectedMode
 		}
 	}
 }

@@ -135,11 +135,8 @@ func EnrichFromWranglerConfig(w *Worker) {
 	w.AccountID = config.AccountID
 
 	// Extract and sort environments
-	w.Environments = config.GetEnvironments()
-	sort.Strings(w.Environments)
-
-	// Default to "production" (the root config)
-	w.SelectedEnv = "production"
+	w.Modes = config.GetEnvironments()
+	sort.Strings(w.Modes)
 }
 
 func (d *Discoverer) hasWranglerScripts(scripts map[string]string) bool {

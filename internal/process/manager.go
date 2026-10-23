@@ -333,7 +333,7 @@ func (m *Manager) StartWorker(w *worker.Worker, script string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	runArgs := []string{"run", script}
-	runArgs = append(runArgs, buildWranglerPassthrough(w.DevMode, w.InspectorPort, w.SelectedEnv)...)
+	runArgs = append(runArgs, buildWranglerPassthrough(w.DevMode, w.InspectorPort, w.SelectedMode)...)
 	cmd := exec.CommandContext(ctx, "bun", runArgs...)
 	cmd.Dir = w.Path
 	// Set process group to handle signals properly
@@ -536,7 +536,7 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 			if w.DevMode != "" {
 				mode = w.DevMode
 			}
-			env = w.SelectedEnv
+			env = w.SelectedMode
 			if w.InspectorPort > 0 {
 				inspectorPort = w.InspectorPort
 			}

@@ -22,11 +22,13 @@ type Worker struct {
 	// Wrangler configuration (parsed from wrangler.toml)
 	WranglerConfig *wrangler.Config `json:"-"`
 
-	// Available environments from wrangler.toml (e.g., "production", "staging")
-	Environments []string `json:"environments,omitempty"`
+	// Modes a worker's cloudflare.config.ts function accepts (cf dev --mode),
+	// e.g. "development", "production".
+	Modes []string `json:"modes,omitempty"`
 
-	// Currently selected environment for remote operations (logs, analytics)
-	SelectedEnv string `json:"selected_env,omitempty"`
+	// SelectedMode is the currently selected cf dev --mode for remote
+	// operations (logs, analytics).
+	SelectedMode string `json:"selected_mode,omitempty"`
 
 	// DevMode is the runtime-selected dev mode (local / remote-bindings / remote).
 	// Empty means remote-bindings (see EffectiveDevMode).
@@ -34,6 +36,13 @@ type Worker struct {
 
 	// AccountID from wrangler.toml (root level)
 	AccountID string `json:"account_id,omitempty"`
+
+	// DevServerURL and DebugURL are discovered at runtime from the cf dev
+	// startup banner (see internal/cfproject.ParseBannerLine). Written by the
+	// manager's log reader; same unsynchronized-field pattern as Status
+	// (parked architectural debt).
+	DevServerURL string `json:"dev_server_url,omitempty"`
+	DebugURL     string `json:"debug_url,omitempty"`
 }
 
 type PackageJSON struct {
@@ -64,23 +73,14 @@ func (w *Worker) HasScript(script string) bool {
 	return exists
 }
 
-// GetAccountIDForEnv returns the account ID for the given environment.
-// Falls back to the root account ID if the environment doesn't have a specific one.
-func (w *Worker) GetAccountIDForEnv(env string) string {
-	if w.WranglerConfig == nil {
-		return w.AccountID
-	}
-	return w.WranglerConfig.GetAccountID(env)
-}
-
-// GetCurrentAccountID returns the account ID for the currently selected environment
+// GetCurrentAccountID returns the account ID for remote operations.
 func (w *Worker) GetCurrentAccountID() string {
-	return w.GetAccountIDForEnv(w.SelectedEnv)
+	return w.AccountID
 }
 
-// HasEnvironments returns true if the worker has multiple environments configured
-func (w *Worker) HasEnvironments() bool {
-	return len(w.Environments) > 1
+// HasModes returns true if the worker has cf dev modes configured
+func (w *Worker) HasModes() bool {
+	return len(w.Modes) > 0
 }
 
 // EffectiveDevMode returns the selected dev mode, defaulting to remote-bindings.

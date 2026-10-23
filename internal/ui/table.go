@@ -606,8 +606,8 @@ func (m TableModel) showEnvSelector() (TableModel, tea.Cmd) {
 	if m.cursor < len(m.workers) {
 		w := m.workers[m.cursor]
 
-		// Only show for workers with multiple environments
-		if w.HasEnvironments() {
+		// Only show for workers with modes configured
+		if w.HasModes() {
 			m.envSelector.Show(w)
 		}
 	}

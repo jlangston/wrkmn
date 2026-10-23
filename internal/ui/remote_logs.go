@@ -101,7 +101,7 @@ func (r *RemoteLogsView) connect() tea.Cmd {
 
 		// Create and start tail session
 		r.ctx, r.cancel = context.WithCancel(context.Background())
-		r.session = cloudflare.NewTailSession(client, accountID, r.worker.Name, r.worker.SelectedEnv)
+		r.session = cloudflare.NewTailSession(client, accountID, r.worker.Name, r.worker.SelectedMode)
 		r.session.SetFilter(r.filter)
 
 		if err := r.session.Start(r.ctx); err != nil {
@@ -166,7 +166,7 @@ func (r *RemoteLogsView) Update(msg tea.Msg) tea.Cmd {
 
 		case "e":
 			// Show environment selector
-			if r.worker != nil && r.worker.HasEnvironments() {
+			if r.worker != nil && r.worker.HasModes() {
 				r.envSelector.Show(r.worker)
 			}
 
@@ -294,8 +294,8 @@ func (r *RemoteLogsView) View() string {
 		Foreground(t.Primary).
 		Bold(true)
 
-	envDisplay := r.worker.SelectedEnv
-	if r.worker.HasEnvironments() {
+	envDisplay := r.worker.SelectedMode
+	if r.worker.HasModes() {
 		envDisplay += " ▾"
 	}
 

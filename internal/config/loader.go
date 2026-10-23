@@ -176,6 +176,20 @@ func (l *Loader) validate(cfg *Config) error {
 		}
 	}
 
+	// Validate modes
+	for name, proc := range cfg.Processes {
+		seen := make(map[string]bool)
+		for _, m := range proc.Modes {
+			if m == "" {
+				return fmt.Errorf("process %q: modes entries must be non-empty strings", name)
+			}
+			if seen[m] {
+				return fmt.Errorf("process %q: duplicate mode %q", name, m)
+			}
+			seen[m] = true
+		}
+	}
+
 	return nil
 }
 
@@ -300,6 +314,11 @@ func (l *Loader) applyDefaults(cfg *Config) {
 		// Default workers to remote-bindings (today's plain `wrangler dev` behavior)
 		if proc.Type == ProcessTypeWorker && proc.DevMode == "" {
 			proc.DevMode = DevModeRemoteBindings
+		}
+
+		// Default modes for workers (cf dev --mode values the selector offers)
+		if proc.Type == ProcessTypeWorker && len(proc.Modes) == 0 {
+			proc.Modes = []string{"development", "production"}
 		}
 
 		// Mark as config-sourced
