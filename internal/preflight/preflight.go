@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sort"
 
+	"wrkmn/internal/cfproject"
 	"wrkmn/internal/config"
 )
 
@@ -45,6 +46,20 @@ func Check(cfg *config.Config) []Issue {
 	}
 	sort.Strings(names)
 
+	// Any worker-type process requires the cf CLI.
+	hasWorker := false
+	for _, proc := range cfg.Processes {
+		if proc.Type == config.ProcessTypeWorker {
+			hasWorker = true
+			break
+		}
+	}
+	if hasWorker {
+		if _, err := exec.LookPath("cf"); err != nil {
+			issues = append(issues, Issue{SeverityError, "", "cf CLI not found on PATH (install: bun add --global cf)"})
+		}
+	}
+
 	for _, name := range names {
 		proc := cfg.Processes[name]
 
@@ -56,6 +71,14 @@ func Check(cfg *config.Config) []Issue {
 			if info, err := os.Stat(proc.WorkingDir); err != nil || !info.IsDir() {
 				issues = append(issues, Issue{SeverityError, name, fmt.Sprintf("working_dir %q is not a directory", proc.WorkingDir)})
 			}
+		}
+
+		if proc.Type == config.ProcessTypeWorker && proc.WorkingDir != "" && cfproject.DetectUnmigrated(proc.WorkingDir) {
+			issues = append(issues, Issue{SeverityError, name, fmt.Sprintf("unmigrated Wrangler project (wrangler config present, no cloudflare.config.ts) — run 'cf migrate' in %s", proc.WorkingDir)})
+		}
+
+		if proc.InspectorPort > 0 {
+			issues = append(issues, Issue{SeverityWarning, name, "inspector_port is ignored since the cf cutover; the debugger discovers its endpoint automatically"})
 		}
 
 		for _, ref := range config.ResolveEnvFilePaths(&proc, cfg.Defaults, cfg.BaseDir) {

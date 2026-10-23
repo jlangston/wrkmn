@@ -303,12 +303,7 @@ func (l *Loader) applyDefaults(cfg *Config) {
 
 		// Set default process type
 		if proc.Type == "" {
-			// If it has an inspector port, it's likely a worker
-			if proc.InspectorPort > 0 {
-				proc.Type = ProcessTypeWorker
-			} else {
-				proc.Type = ProcessTypeService
-			}
+			proc.Type = ProcessTypeService
 		}
 
 		// Default workers to remote-bindings (today's plain `wrangler dev` behavior)

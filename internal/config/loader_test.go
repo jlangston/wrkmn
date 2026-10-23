@@ -366,7 +366,7 @@ processes:
 		assert.Equal(t, time.Second, restart.Delay.Duration)
 	})
 
-	t.Run("sets process type based on inspector port", func(t *testing.T) {
+	t.Run("defaults untyped processes to service", func(t *testing.T) {
 		dir := t.TempDir()
 		configPath := filepath.Join(dir, "worker-compose.yaml")
 		configContent := `
@@ -374,6 +374,7 @@ version: "1.0"
 processes:
   worker:
     command: wrangler
+    type: worker
     inspector_port: 9229
   service:
     command: node
@@ -754,5 +755,22 @@ processes:
 `)
 	if _, err := NewLoader(empty).Load(); err == nil {
 		t.Fatal("empty mode string should be rejected")
+	}
+}
+
+func TestInspectorPortNoLongerInfersWorkerType(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: sh
+    inspector_port: 9229
+`)
+	cfg, err := NewLoader(path).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Processes["api"].Type != ProcessTypeService {
+		t.Fatalf("Type = %q, want service (inference removed)", cfg.Processes["api"].Type)
 	}
 }

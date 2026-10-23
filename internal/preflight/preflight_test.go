@@ -78,3 +78,36 @@ func TestCleanConfigHasNoIssues(t *testing.T) {
 		t.Fatalf("clean config produced issues:\n%s", issueMessages(issues))
 	}
 }
+
+func TestUnmigratedWorkingDirIsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "wrangler.toml"), []byte(`name = "x"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{BaseDir: dir, Processes: map[string]config.Process{
+		"api": {Command: "cf", WorkingDir: dir, Type: config.ProcessTypeWorker},
+	}}
+	issues := Check(cfg)
+	if !findIssue(issues, "api", SeverityError, "cf migrate") {
+		t.Fatalf("unmigrated dir not reported:\n%s", issueMessages(issues))
+	}
+}
+
+func TestDeprecatedInspectorPortWarns(t *testing.T) {
+	cfg := &config.Config{BaseDir: t.TempDir(), Processes: map[string]config.Process{
+		"api": {Command: "sh", InspectorPort: 9229, Type: config.ProcessTypeWorker},
+	}}
+	if !findIssue(Check(cfg), "api", SeverityWarning, "inspector_port is ignored") {
+		t.Fatal("deprecated inspector_port not warned")
+	}
+}
+
+func TestCfMissingFromPathIsError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // nothing on PATH
+	cfg := &config.Config{BaseDir: t.TempDir(), Processes: map[string]config.Process{
+		"api": {Command: "cf", Type: config.ProcessTypeWorker},
+	}}
+	if !findIssue(Check(cfg), "", SeverityError, "cf CLI not found") {
+		t.Fatal("missing cf not reported")
+	}
+}
