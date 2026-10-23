@@ -1,6 +1,7 @@
 package debug
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -35,9 +36,20 @@ func NewInspectorDiscovery(port int) *InspectorDiscovery {
 	}
 }
 
-// Discover returns all available inspector targets
+// Discover returns all available inspector targets.
 func (d *InspectorDiscovery) Discover() ([]InspectorTarget, error) {
-	resp, err := d.client.Get(d.baseURL + "/json")
+	return d.DiscoverContext(context.Background())
+}
+
+// DiscoverContext is Discover with ctx honored for cancellation and
+// deadlines, so a caller can bound a single probe (e.g. a short per-port
+// budget during a fallback scan) independently of the client's own timeout.
+func (d *InspectorDiscovery) DiscoverContext(ctx context.Context) ([]InspectorTarget, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.baseURL+"/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := d.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to inspector: %w", err)
 	}

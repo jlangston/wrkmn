@@ -92,3 +92,30 @@ func TestDiscoverWorkerWSTimeoutNamesSteps(t *testing.T) {
 		t.Fatalf("error not descriptive: %v", err)
 	}
 }
+
+func TestDiscoverWorkerWSFallbackScanBoundedByTimeout(t *testing.T) {
+	// IMPORTANT finding: a stuck/unresponsive inspector on a fallback port must
+	// not let the scan overrun DiscoverWorkerWS's timeout contract. The handler
+	// sleeps far longer than the timeout but returns early if its request
+	// context is cancelled, so the test server shuts down cleanly once
+	// DiscoverWorkerWS gives up and the per-port probe context expires.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(10 * time.Second):
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	_, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	port, _ := strconv.Atoi(portStr)
+
+	start := time.Now()
+	_, err := DiscoverWorkerWS(context.Background(), "api", func() string { return "" }, []int{port}, 1*time.Second)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("DiscoverWorkerWS overran its timeout: took %s against a 1s budget", elapsed)
+	}
+}
