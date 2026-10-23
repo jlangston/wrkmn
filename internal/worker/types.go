@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"wrkmn/internal/config"
-	"wrkmn/internal/wrangler"
 )
 
 type Worker struct {
@@ -13,14 +12,11 @@ type Worker struct {
 	PackageJSON *PackageJSON      `json:"package_json"`
 	Scripts     map[string]string `json:"scripts"`
 	Port        int               `json:"port"`
-	// InspectorPort is the V8 inspector / debugger port (wrangler --inspector-port).
-	// Distinct from Port (the HTTP serving port). 0 if not configured.
-	InspectorPort int          `json:"inspector_port,omitempty"`
-	Status        WorkerStatus `json:"status"`
-	LastUpdated   time.Time    `json:"last_updated"`
+	Status      WorkerStatus      `json:"status"`
+	LastUpdated time.Time         `json:"last_updated"`
 
-	// Wrangler configuration (parsed from wrangler.toml)
-	WranglerConfig *wrangler.Config `json:"-"`
+	// IsCfProject marks a directory with a cloudflare.config.* file.
+	IsCfProject bool `json:"is_cf_project,omitempty"`
 
 	// Modes a worker's cloudflare.config.ts function accepts (cf dev --mode),
 	// e.g. "development", "production".
@@ -34,7 +30,8 @@ type Worker struct {
 	// Empty means remote-bindings (see EffectiveDevMode).
 	DevMode config.DevMode `json:"dev_mode,omitempty"`
 
-	// AccountID from wrangler.toml (root level)
+	// AccountID for remote operations. Precedence: compose account_id > Build
+	// Output > CLOUDFLARE_ACCOUNT_ID fallback inside the tail client.
 	AccountID string `json:"account_id,omitempty"`
 
 	// DevServerURL and DebugURL are discovered at runtime from the cf dev
@@ -73,11 +70,6 @@ func (w *Worker) HasScript(script string) bool {
 	return exists
 }
 
-// GetCurrentAccountID returns the account ID for remote operations.
-func (w *Worker) GetCurrentAccountID() string {
-	return w.AccountID
-}
-
 // HasModes returns true if the worker has cf dev modes configured
 func (w *Worker) HasModes() bool {
 	return len(w.Modes) > 0
@@ -97,7 +89,7 @@ func (w *Worker) SupportsDebugging() bool {
 	return true
 }
 
-// IsCloudflareWorker returns true if this worker has a wrangler.toml configuration
+// IsCloudflareWorker returns true if this worker is a detected cf project.
 func (w *Worker) IsCloudflareWorker() bool {
-	return w.WranglerConfig != nil
+	return w.IsCfProject
 }

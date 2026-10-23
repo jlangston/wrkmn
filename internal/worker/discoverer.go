@@ -5,160 +5,72 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
-	"strings"
 
-	"wrkmn/internal/wrangler"
+	"wrkmn/internal/cfproject"
 )
 
-type Discoverer struct {
-	portRegex *regexp.Regexp
-}
+type Discoverer struct{}
 
-func NewDiscoverer() *Discoverer {
-	return &Discoverer{
-		portRegex: regexp.MustCompile(`--port\s+(\d+)`),
-	}
-}
+func NewDiscoverer() *Discoverer { return &Discoverer{} }
 
-func (d *Discoverer) DiscoverWorkers(rootPath string) ([]*Worker, error) {
-	var workers []*Worker
-
+// DiscoverWorkers scans rootPath's immediate subdirectories. A directory with
+// a cloudflare.config.* file is a worker; a directory with only a Wrangler
+// config is returned in unmigrated so callers can tell the user to run
+// `cf migrate` there.
+func (d *Discoverer) DiscoverWorkers(rootPath string) (workers []*Worker, unmigrated []string, err error) {
 	entries, err := os.ReadDir(rootPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read directory %s: %w", rootPath, err)
+		return nil, nil, fmt.Errorf("failed to read directory %s: %w", rootPath, err)
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() {
-			workerPath := filepath.Join(rootPath, entry.Name())
-			packageJSONPath := filepath.Join(workerPath, "package.json")
-
-			if _, err := os.Stat(packageJSONPath); err == nil {
-				worker, err := d.parseWorkerFromPackageJSON(packageJSONPath)
-				if err != nil {
-					fmt.Printf("Warning: Failed to parse %s: %v\n", packageJSONPath, err)
-					continue
-				}
-
-				if worker != nil {
-					workers = append(workers, worker)
-				}
-			}
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(rootPath, entry.Name())
+		if _, ok := cfproject.Detect(dir); ok {
+			workers = append(workers, buildWorker(dir))
+			continue
+		}
+		if cfproject.DetectUnmigrated(dir) {
+			unmigrated = append(unmigrated, dir)
 		}
 	}
-
-	return workers, nil
+	return workers, unmigrated, nil
 }
 
-func (d *Discoverer) parseWorkerFromPackageJSON(packageJSONPath string) (*Worker, error) {
-	data, err := os.ReadFile(packageJSONPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read package.json: %w", err)
-	}
-
-	var pkg PackageJSON
-	if err := json.Unmarshal(data, &pkg); err != nil {
-		return nil, fmt.Errorf("failed to parse package.json: %w", err)
-	}
-
-	if !d.hasWranglerScripts(pkg.Scripts) {
-		return nil, nil
-	}
-
-	workerDir := filepath.Dir(packageJSONPath)
-	workerName := filepath.Base(workerDir)
-
-	if pkg.Name != "" {
-		workerName = pkg.Name
-	}
-
-	port := d.extractPortFromDevScript(pkg.Scripts["dev"])
-
-	worker := &Worker{
-		Name:        workerName,
-		Path:        workerDir,
-		PackageJSON: &pkg,
-		Scripts:     pkg.Scripts,
-		Port:        port,
+// buildWorker assembles a Worker for a detected cf project directory.
+// Name precedence: Build Output > package.json name > directory name.
+func buildWorker(dir string) *Worker {
+	w := &Worker{
+		Name:        filepath.Base(dir),
+		Path:        dir,
 		Status:      StatusStopped,
+		IsCfProject: true,
+		Scripts:     map[string]string{},
 	}
 
-	// Parse wrangler.toml if present
-	d.parseWranglerConfig(worker)
-
-	return worker, nil
-}
-
-// parseWranglerConfig loads and parses wrangler.toml for a worker.
-func (d *Discoverer) parseWranglerConfig(w *Worker) {
-	EnrichFromWranglerConfig(w)
-}
-
-// EnrichFromWranglerConfig loads wrangler.toml from the worker's Path and
-// populates WranglerConfig, name, account ID, environments, and (when not
-// already set from a --port flag) the serving Port from the [dev] block.
-//
-// It is safe to call for workers without a wrangler.toml (e.g. plain services
-// or config-defined processes whose working dir isn't a worker) — it returns
-// without modifying the worker in that case.
-func EnrichFromWranglerConfig(w *Worker) {
-	if !wrangler.Exists(w.Path) {
-		return
-	}
-
-	config, err := wrangler.LoadFromDirectory(w.Path)
-	if err != nil {
-		// Log warning but continue - worker can still function without wrangler config
-		fmt.Printf("Warning: Failed to parse wrangler.toml for %s: %v\n", w.Name, err)
-		return
-	}
-
-	w.WranglerConfig = config
-
-	// Use name from wrangler.toml if available
-	if config.Name != "" {
-		w.Name = config.Name
-	}
-
-	// Port precedence mirrors wrangler itself: a --port flag in the dev script
-	// wins, otherwise fall back to the [dev] port in wrangler.toml. Without this
-	// fallback, workers that rely on [dev].port (no --port flag) show port 0 in
-	// the UI even though wrangler starts them on the configured port.
-	if w.Port == 0 && config.Dev.Port != 0 {
-		w.Port = config.Dev.Port
-	}
-
-	// Set account ID from root config
-	w.AccountID = config.AccountID
-
-	// Extract and sort environments
-	w.Modes = config.GetEnvironments()
-	sort.Strings(w.Modes)
-}
-
-func (d *Discoverer) hasWranglerScripts(scripts map[string]string) bool {
-	for _, script := range scripts {
-		if strings.Contains(script, "wrangler") {
-			return true
-		}
-	}
-	return false
-}
-
-func (d *Discoverer) extractPortFromDevScript(devScript string) int {
-	if devScript == "" {
-		return 0
-	}
-
-	matches := d.portRegex.FindStringSubmatch(devScript)
-	if len(matches) > 1 {
-		if port, err := strconv.Atoi(matches[1]); err == nil {
-			return port
+	if data, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
+		var pkg PackageJSON
+		if json.Unmarshal(data, &pkg) == nil {
+			if pkg.Name != "" {
+				w.Name = pkg.Name
+			}
+			if pkg.Scripts != nil {
+				w.Scripts = pkg.Scripts
+			}
+			w.PackageJSON = &pkg
 		}
 	}
 
-	return 0
+	if bo, err := cfproject.ReadBuildOutput(dir); err == nil && bo != nil {
+		if bo.WorkerName != "" {
+			w.Name = bo.WorkerName
+		}
+		if bo.AccountID != "" {
+			w.AccountID = bo.AccountID
+		}
+	}
+
+	return w
 }

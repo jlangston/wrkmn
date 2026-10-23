@@ -22,15 +22,15 @@ type RemoteLogsView struct {
 	session *cloudflare.TailSession
 
 	// UI state
-	width   int
-	height  int
-	scroll  int
-	filter  cloudflare.TailFilter
+	width      int
+	height     int
+	scroll     int
+	filter     cloudflare.TailFilter
 	showFilter bool
 
 	// Messages
-	messages   []cloudflare.TailMessage
-	messagesMu sync.RWMutex
+	messages    []cloudflare.TailMessage
+	messagesMu  sync.RWMutex
 	maxMessages int
 
 	// Status
@@ -94,7 +94,7 @@ func (r *RemoteLogsView) connect() tea.Cmd {
 		r.client = client
 
 		// Get account ID for current environment
-		accountID := r.worker.GetCurrentAccountID()
+		accountID := r.worker.AccountID
 		if accountID == "" {
 			return remoteLogsErrorMsg{err: cloudflare.ErrNoAccountID}
 		}

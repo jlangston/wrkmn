@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"wrkmn/internal/cfproject"
 	"wrkmn/internal/config"
 	"wrkmn/internal/preflight"
 	"wrkmn/internal/state"
@@ -143,23 +144,22 @@ func runApp(cmd *cobra.Command, args []string) {
 	configWorkerNames := make(map[string]bool)
 
 	for name, proc := range cfg.Processes {
+		isCf := false
+		if proc.WorkingDir != "" {
+			_, isCf = cfproject.Detect(proc.WorkingDir)
+		}
 		w := &worker.Worker{
-			Name:          name,
-			Path:          proc.WorkingDir,
-			Status:        worker.StatusStopped,
-			InspectorPort: proc.InspectorPort,
-			DevMode:       proc.DevMode,
-			Modes:         proc.Modes,
-			AccountID:     proc.AccountID,
+			Name:        name,
+			Path:        proc.WorkingDir,
+			Status:      worker.StatusStopped,
+			IsCfProject: isCf,
+			DevMode:     proc.DevMode,
+			Modes:       proc.Modes,
+			AccountID:   proc.AccountID,
 			Scripts: map[string]string{
 				"_config": proc.Command, // Special marker for config-based processes
 			},
 		}
-		// Populate the real serving Port (and env/cloudflare metadata) from the
-		// process's wrangler.toml [dev] block. Previously Port was set to the
-		// inspector port, so the UI showed 9229+ instead of the port wrangler
-		// actually serves on (e.g. 8787). No-op for non-worker services.
-		worker.EnrichFromWranglerConfig(w)
 		workers = append(workers, w)
 		configWorkerNames[name] = true
 	}
@@ -168,10 +168,13 @@ func runApp(cmd *cobra.Command, args []string) {
 	if cfg.Discovery.Enabled {
 		discoverer := worker.NewDiscoverer()
 		for _, path := range cfg.Discovery.Paths {
-			discovered, err := discoverer.DiscoverWorkers(path)
+			discovered, unmigrated, err := discoverer.DiscoverWorkers(path)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: discovery failed for %s: %v\n", path, err)
 				continue
+			}
+			for _, dir := range unmigrated {
+				fmt.Fprintf(os.Stderr, "Warning: %s is an unmigrated Wrangler project — run 'cf migrate' there to manage it with wrkmn\n", dir)
 			}
 			for _, w := range discovered {
 				// Skip if already defined in config

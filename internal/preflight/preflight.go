@@ -5,11 +5,9 @@ package preflight
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"sort"
-	"time"
 
 	"wrkmn/internal/config"
 )
@@ -36,8 +34,6 @@ type Issue struct {
 	Message  string
 }
 
-const dialTimeout = 250 * time.Millisecond
-
 // Check inspects the configuration and environment. Deterministic order
 // (processes sorted by name) so reports are stable.
 func Check(cfg *config.Config) []Issue {
@@ -48,8 +44,6 @@ func Check(cfg *config.Config) []Issue {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-
-	inspectorPorts := make(map[int][]string)
 
 	for _, name := range names {
 		proc := cfg.Processes[name]
@@ -72,27 +66,6 @@ func Check(cfg *config.Config) []Issue {
 					issues = append(issues, Issue{SeverityError, name, fmt.Sprintf("env file %q not found", ref.Path)})
 				}
 			}
-		}
-
-		if proc.InspectorPort > 0 {
-			inspectorPorts[proc.InspectorPort] = append(inspectorPorts[proc.InspectorPort], name)
-			addr := fmt.Sprintf("localhost:%d", proc.InspectorPort)
-			if conn, err := net.DialTimeout("tcp", addr, dialTimeout); err == nil {
-				conn.Close()
-				issues = append(issues, Issue{SeverityWarning, name, fmt.Sprintf("inspector port %d is already in use", proc.InspectorPort)})
-			}
-		}
-	}
-
-	ports := make([]int, 0, len(inspectorPorts))
-	for port := range inspectorPorts {
-		ports = append(ports, port)
-	}
-	sort.Ints(ports)
-	for _, port := range ports {
-		if procs := inspectorPorts[port]; len(procs) > 1 {
-			sort.Strings(procs)
-			issues = append(issues, Issue{SeverityError, "", fmt.Sprintf("inspector port %d used by multiple processes: %v", port, procs)})
 		}
 	}
 

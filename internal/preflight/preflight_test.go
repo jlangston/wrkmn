@@ -2,7 +2,6 @@ package preflight
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,34 +63,6 @@ func TestEnvFileSeverityByProvenance(t *testing.T) {
 	}
 	if !findIssue(issues, "api", SeverityWarning, "shared-missing.env") {
 		t.Fatalf("defaulted missing env file should be a warning:\n%s", issueMessages(issues))
-	}
-}
-
-func TestDuplicateInspectorPortsIsError(t *testing.T) {
-	cfg := &config.Config{BaseDir: t.TempDir(), Processes: map[string]config.Process{
-		"a": {Command: "sh", InspectorPort: 9329, Type: config.ProcessTypeWorker},
-		"b": {Command: "sh", InspectorPort: 9329, Type: config.ProcessTypeWorker},
-	}}
-	issues := Check(cfg)
-	if !findIssue(issues, "", SeverityError, "9329") {
-		t.Fatalf("duplicate inspector port not reported:\n%s", issueMessages(issues))
-	}
-}
-
-func TestOccupiedInspectorPortIsWarning(t *testing.T) {
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer ln.Close()
-	port := ln.Addr().(*net.TCPAddr).Port
-
-	cfg := &config.Config{BaseDir: t.TempDir(), Processes: map[string]config.Process{
-		"api": {Command: "sh", InspectorPort: port, Type: config.ProcessTypeWorker},
-	}}
-	issues := Check(cfg)
-	if !findIssue(issues, "api", SeverityWarning, "already in use") {
-		t.Fatalf("occupied inspector port not reported:\n%s", issueMessages(issues))
 	}
 }
 
