@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,7 +63,25 @@ func (s *Session) Connect(target *InspectorTarget) error {
 	s.state.SetState(StateConnecting)
 
 	dialer := websocket.Dialer{}
-	conn, _, err := dialer.DialContext(s.ctx, target.WebSocketDebuggerURL, nil)
+
+	// Origin is required by miniflare's inspector proxy (the server behind
+	// cf dev's ws://localhost:9229/<worker> endpoint). Its upgrade validation
+	// (InspectorProxyController#validateDevToolsWebSocketUpgradeRequest in
+	// miniflare's inspector-proxy-controller.ts) demands an allowed Origin
+	// header whenever the handshake carries a User-Agent, and on failure it
+	// completes the 101 upgrade and then closes with a bare close frame —
+	// which gorilla surfaces as "close 1005 (no status)" within milliseconds.
+	// gorilla writes its handshake via net/http's Request.Write, which always
+	// injects "User-Agent: Go-http-client/1.1" when none is set, so without
+	// an Origin every connect is rejected ("Expected `Origin` header").
+	// "http://localhost" is the exact value miniflare itself substitutes for
+	// UA-less CDP clients (e.g. Node's `ws`) and its hostname is permanently
+	// in the proxy's ALLOWED_ORIGIN_HOSTNAMES list. Verified byte-for-byte
+	// against @cloudflare/vite-plugin 2.0.0-beta.v.4 / miniflare
+	// 5.20261019.2-beta on 2026-10-24: identical handshakes with and without
+	// this header fail and succeed respectively.
+	header := http.Header{"Origin": {"http://localhost"}}
+	conn, _, err := dialer.DialContext(s.ctx, target.WebSocketDebuggerURL, header)
 	if err != nil {
 		s.state.SetState(StateDisconnected)
 		return fmt.Errorf("failed to connect to inspector: %w", err)

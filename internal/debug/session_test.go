@@ -269,7 +269,11 @@ func TestHandlePausedPlainOtherKeepsReason(t *testing.T) {
 // wait, that the session terminates cleanly: no panic, Done() closes, and
 // Connect() returns instead of hanging, leaving the session disconnected.
 func TestSession_AbnormalCloseTerminatesSession(t *testing.T) {
-	upgrader := websocket.Upgrader{}
+	// Accept any Origin: Session.Connect sends "Origin: http://localhost"
+	// (required by miniflare's inspector proxy, see Connect), and gorilla's
+	// default CheckOrigin would refuse it against this httptest server's
+	// 127.0.0.1 host -- the real inspector accepts it.
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
