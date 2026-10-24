@@ -16,8 +16,10 @@ var validateCmd = &cobra.Command{
 	Use:   "validate [directory]",
 	Short: "Validate configuration and environment without starting anything",
 	Long: `Loads worker-compose.yaml, validates it (types, dependencies, cycles,
-dev modes), and runs pre-flight checks: commands on PATH, working
-directories, env files, inspector ports.
+dev modes), and runs pre-flight checks: cf CLI on PATH (if any worker
+processes are configured), commands on PATH, working directories,
+unmigrated Wrangler projects, and env files. A configured inspector_port
+is flagged as a deprecated, ignored setting.
 
 Exit code 0 when there are no errors (warnings allowed), 1 otherwise.`,
 	Args: cobra.MaximumNArgs(1),

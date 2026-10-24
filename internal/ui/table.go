@@ -583,7 +583,7 @@ func (m TableModel) showRemoteLogs() (TableModel, tea.Cmd) {
 	if m.cursor < len(m.workers) {
 		w := m.workers[m.cursor]
 
-		// Only show for Cloudflare Workers with wrangler config
+		// Only show for detected cf projects
 		if !w.IsCloudflareWorker() {
 			return m, nil
 		}

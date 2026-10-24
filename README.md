@@ -4,7 +4,7 @@ A powerful TUI for managing Cloudflare Workers and related processes. Think of i
 
 ## Features
 
-- **Auto-discovery** - Automatically discovers Cloudflare workers by scanning for `wrangler.toml` and `package.json`
+- **Auto-discovery** - Automatically discovers Cloudflare Workers by scanning for `cloudflare.config.{ts,mts,js,mjs}`; directories with only a Wrangler config are flagged as unmigrated with a `cf migrate` hint
 - **Process orchestration** - Manage workers alongside services like Docker, databases, etc.
 - **Dependency management** - Define startup order with health check conditions
 - **Health checks** - HTTP, TCP, and exec-based checks gate startup ordering
@@ -84,11 +84,11 @@ processes:
       retries: 10
 
   my-worker:
-    command: pnpm
-    args: [run, dev]
+    command: cf
+    args: [dev]
     working_dir: ./my-worker
     type: worker
-    inspector_port: 9229
+    modes: [development, production]
     depends_on:
       - process: postgres
         condition: process_healthy
@@ -101,7 +101,7 @@ defaults:
 
 ### Process Types
 
-- `worker` - CF Worker with inspector port for debugging
+- `worker` - Cloudflare Worker launched via `cf dev`; the debugger attaches automatically
 - `service` - Generic process (docker, database, etc.)
 - `oneshot` - runs once; exit 0 marks it completed; dependents can wait on it with `condition: process_completed`
 
@@ -119,18 +119,22 @@ Applies to config-defined `worker`/`service` processes (a process's own `restart
 
 ### Dev Modes
 
-Each worker runs in one of three modes (press `m` to switch; set a default with `dev_mode:` in `worker-compose.yaml`):
+Each worker runs in one of two modes (press `m` to switch; set a default with `dev_mode:` in `worker-compose.yaml`):
 
-| Mode | `wrangler dev` | Bindings | Debugger |
+| Mode | `cf dev` | Bindings | Debugger |
 | --- | --- | --- | --- |
 | `local` | `--local` | all local simulations | ✅ |
 | `remote-bindings` (default) | _(none)_ | honors each worker's `remote: true` bindings | ✅ |
-| `remote` (full-remote) | `--remote` | all remote, code on edge | ❌ |
 
-**Full-remote caveats:** slower iteration (upload per change), a 50-routes-per-zone limit, deployed secrets are not loaded (use local `.dev.vars`), and breakpoint debugging is unavailable. wrkmn asks for confirmation before starting a worker in this mode.
+Full-remote dev doesn't exist in the cf CLI, so it isn't an option here.
 
-Dev mode (`m`) and environment (`e`) selections persist across sessions in
+### Modes
+
+A worker's `cloudflare.config.ts` can export multiple named configs (e.g. `development`, `production`) that `cf dev --mode <name>` selects between. List the ones a worker supports under `modes:` in `worker-compose.yaml` (defaults to `[development, production]` for `type: worker` processes), then press `e` to pick one. Leaving the selection empty means wrkmn passes no `--mode` flag at all, so cf falls back to its own default (`development`).
+
+Dev mode (`m`) and mode (`e`) selections persist across sessions in
 `.wrkmn-state.json` next to your config — add it to your project's .gitignore.
+Older state files that stored `selected_env` are migrated automatically.
 
 ### Dependency Conditions
 
@@ -154,9 +158,12 @@ in the background.
 wrkmn validate [directory]   # check config + environment, start nothing
 ```
 
-Checks: YAML validity, dependency cycles, process types, dev modes, commands
-on PATH, working directories, env files (explicit = error, inherited default =
-warning), inspector port conflicts. Exit 0 unless errors.
+Checks: YAML validity, dependency cycles, process types, dev modes, the `cf`
+CLI on PATH (if any worker processes are configured), commands on PATH,
+working directories, unmigrated Wrangler projects (missing `cf migrate`), and
+env files (explicit = error, inherited default = warning). A configured
+`inspector_port` is reported as a deprecated, ignored setting. Exit 0 unless
+errors.
 
 The TUI runs the same checks at startup: errors block, warnings pause for
 Enter. Bypass with `--skip-preflight`.
@@ -171,10 +178,10 @@ Enter. Bypass with `--skip-preflight`.
 | `Enter` / `l` | View logs |
 | `d` | Start (dev) |
 | `D` | Enter debug mode (running CF Workers only) |
-| `m` | Select dev mode (local / remote-bindings / full-remote) |
+| `m` | Select dev mode (local / remote-bindings) |
 | `s` | Run a script |
 | `r` | Remote logs (CF Workers) |
-| `e` | Select environment |
+| `e` | Select mode |
 | `x` | Stop process |
 | `a` | Start all |
 | `z` | Stop all |
@@ -220,17 +227,16 @@ Enter. Bypass with `--skip-preflight`.
 
 ## Debugging CF Workers
 
-wrkmn includes a full CDP-based debugger for Cloudflare Workers:
+wrkmn includes a full CDP-based debugger for Cloudflare Workers, and it attaches automatically — there's nothing to configure:
 
-1. Give each worker a distinct `inspector_port` in `worker-compose.yaml` (default wrangler port is 9229). wrkmn forwards this to `wrangler dev --inspector-port`, so multiple workers can be debugged at once without colliding.
-2. Start the worker (`d`) — it must be running to attach.
-3. Select it and press `D` to attach the debugger.
-4. Set breakpoints with `F9`, step with `F10` (over) / `F11` (into) / `F12` (out), continue with `F5`.
-5. `Tab` cycles panels (source / call stack / variables / console).
-6. Inspect variables in the variables panel and evaluate expressions in the REPL console.
-7. Press `Esc` (from any panel except the console) to detach and return to the dashboard.
+1. Start the worker (`d`) — it must be running to attach.
+2. Select it and press `D` to attach the debugger. wrkmn reads the `Debug:` URL off the worker's `cf dev` startup banner, fetches its `/__debug` page, and extracts the CDP websocket; if the banner hasn't printed yet, it falls back to scanning ports 9229–9249 for an inspector target matching the worker's name.
+3. Set breakpoints with `F9`, step with `F10` (over) / `F11` (into) / `Shift+F11` (out), continue with `F5`.
+4. `Tab` cycles panels (source / call stack / variables / console).
+5. Inspect variables in the variables panel and evaluate expressions in the REPL console.
+6. Press `Esc` (from any panel except the console) to detach and return to the dashboard.
 
-The inspector is a standard CDP endpoint, so you can also attach external clients (Chrome DevTools, VS Code) to the same `inspector_port`.
+**Known v1 limitation:** `cf dev` serves an SSR-transformed module (via the Cloudflare Vite plugin), which renames module-level bindings — `env` becomes something like `__vite_ssr_import_0__.env`. Evaluating a binding by its original name in the REPL throws a `ReferenceError`; frame-local variables are unaffected.
 
 ## Themes
 
@@ -258,7 +264,23 @@ ui:
 ## Requirements
 
 - Go 1.21+
-- For worker debugging: Workers running with `wrangler dev --inspector-port`
+- The `cf` CLI on PATH for any `worker`-type process or discovered worker (`bun add --global cf`)
+
+## Testing
+
+```bash
+go test ./...
+```
+
+To verify a machine's cf setup end-to-end — `cf` and `bun` on PATH plus
+network access to scaffold a throwaway project — run the live smoke test. It
+launches a worker through the process manager, attaches the debugger through
+the same discovery path the TUI uses, and drives a breakpoint
+pause/inspect/resume:
+
+```bash
+go test -tags cfsmoke ./test/integration/ -run TestCfLiveSmoke -v -timeout 300s
+```
 
 ## License
 
