@@ -1,10 +1,14 @@
 package debug
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -245,5 +249,65 @@ func TestHandlePausedPlainOtherKeepsReason(t *testing.T) {
 	ev := <-s.Events()
 	if pe := ev.Data.(PausedEvent); pe.Reason != PauseReasonOther {
 		t.Fatalf("Reason = %q, want other", pe.Reason)
+	}
+}
+
+// TestSession_AbnormalCloseTerminatesSession reproduces the production defect
+// found by the live CDP smoke test (see .superpowers/sdd/2026-10-19-cf-cutover/
+// task-8-report.md): a peer that tears the WebSocket connection down
+// abnormally (no close frame, e.g. CDP close code 1005 "no status" as seen
+// against the real `cf dev` inspector) must cause receiveMessages to treat
+// the connection as dead -- not retry ReadJSON forever, which trips
+// gorilla's "repeated read on failed websocket connection" panic guard and
+// also leaves Connect()'s enableDomains() call parked on <-respChan forever
+// since nothing ever cancels the session context.
+//
+// This test accepts a WebSocket upgrade then immediately closes the
+// underlying TCP connection without sending a close frame (gorilla's
+// (*Conn).Close() on the server side is documented to close "without
+// sending or waiting for a close message"). It asserts, within a bounded
+// wait, that the session terminates cleanly: no panic, Done() closes, and
+// Connect() returns instead of hanging, leaving the session disconnected.
+func TestSession_AbnormalCloseTerminatesSession(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		// Abruptly tear down the TCP connection without a close frame --
+		// mirrors the real cf dev inspector's instant abnormal close (1005).
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	s := NewSession()
+	target := &InspectorTarget{WebSocketDebuggerURL: wsURL}
+
+	connectDone := make(chan error, 1)
+	go func() {
+		connectDone <- s.Connect(target)
+	}()
+
+	select {
+	case <-s.Done():
+		// Session torn down, as expected.
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not terminate within 5s of an abnormal close")
+	}
+
+	// Connect() may be blocked inside enableDomains() waiting on a CDP
+	// response that will never arrive; it must unblock via ctx cancellation
+	// instead of hanging forever.
+	select {
+	case <-connectDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Connect() did not return within 5s after session termination")
+	}
+
+	if got := s.State().GetState(); got != StateDisconnected {
+		t.Fatalf("state = %v, want %v", got, StateDisconnected)
 	}
 }

@@ -206,18 +206,23 @@ func (s *Session) receiveMessages() {
 			default:
 			}
 
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return
-			}
-
-			// Check for timeout (expected when no messages)
+			// Timeout is expected when no messages have arrived recently;
+			// go back around and check ctx/deadline again.
 			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
 				continue
 			}
 
-			// Log unexpected errors and continue
-			log.Printf("debug session read error: %v", err)
-			continue
+			// Any other read error - including a normal/going-away close and
+			// an abnormal closure (e.g. the peer tearing down the TCP
+			// connection without a close frame) - means this connection is
+			// permanently broken. gorilla panics ("repeated read on failed
+			// websocket connection") if we call ReadJSON again, so treat the
+			// session as dead: log once, tear it down exactly once, and stop
+			// reading. Disconnect() cancels ctx, which is how Done() (and in
+			// turn the UI's listenDebugEvents) learns the session is gone.
+			log.Printf("debug session read error: %v; closing session", err)
+			s.Disconnect()
+			return
 		}
 
 		// Handle response to pending call
