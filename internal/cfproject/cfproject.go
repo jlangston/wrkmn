@@ -100,13 +100,16 @@ const (
 
 var (
 	ansiRe  = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-	localRe = regexp.MustCompile(`Local:\s+(https?://\S+)`)
-	debugRe = regexp.MustCompile(`Debug:\s+(https?://\S+)`)
+	localRe = regexp.MustCompile(`^\s*➜\s+Local:\s+(https?://\S+)`)
+	debugRe = regexp.MustCompile(`^\s*➜\s+Debug:\s+(https?://\S+)`)
 	wsRe    = regexp.MustCompile(`[?&]ws=([^&"'\]\s]+)`)
 )
 
 // ParseBannerLine matches the Vite/cf dev startup banner's Local and Debug
-// lines. ANSI color codes are stripped before matching.
+// lines. ANSI color codes are stripped before matching. Anchored to the
+// banner's real shape (start-of-line optional whitespace + the ➜ arrow) so an
+// app log line that merely contains "Local: http://..." mid-run can't be
+// mistaken for the banner and clobber the worker's discovered URLs.
 func ParseBannerLine(line string) (BannerKind, string, bool) {
 	plain := ansiRe.ReplaceAllString(line, "")
 	if m := debugRe.FindStringSubmatch(plain); m != nil {

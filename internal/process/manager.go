@@ -337,6 +337,15 @@ func (m *Manager) StartWorker(w *worker.Worker) error {
 		delete(m.processes, w.Name) // dead entry from a previous run — replace it
 	}
 
+	// Stale values from a previous run must not leak into discovery: ports
+	// get reassigned across restarts (vite auto-increments), so a dangling
+	// DebugURL could point debugger attach at a different worker entirely.
+	// Writes follow the existing unsynchronized Worker-field pattern (see
+	// applyBannerLine and Status).
+	w.DevServerURL = ""
+	w.DebugURL = ""
+	w.Port = 0
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	runArgs := append([]string{"dev"}, buildCfDevArgs(w.DevMode, w.SelectedMode)...)
@@ -543,6 +552,15 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 				mode = w.DevMode
 			}
 			selectedMode = w.SelectedMode
+
+			// Stale values from a previous run must not leak into discovery:
+			// ports get reassigned across restarts (vite auto-increments), so
+			// a dangling DebugURL could point debugger attach at a different
+			// worker entirely. Writes follow the existing unsynchronized
+			// Worker-field pattern (see applyBannerLine and Status).
+			w.DevServerURL = ""
+			w.DebugURL = ""
+			w.Port = 0
 		}
 		args = append(args, buildCfDevArgs(mode, selectedMode)...)
 	}

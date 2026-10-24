@@ -460,3 +460,63 @@ func TestBannerParsingPopulatesWorkerURLs(t *testing.T) {
 		t.Fatalf("banner not parsed: Port=%d DevServerURL=%q DebugURL=%q", w.Port, w.DevServerURL, w.DebugURL)
 	}
 }
+
+// TestStaleWorkerFieldsClearedOnRestart is a regression test: a previous
+// run's DevServerURL/DebugURL/Port must not survive into a new run. Ports
+// get reassigned across restarts (vite auto-increments), so a dangling
+// DebugURL from the old run could point debugger attach at a different
+// worker's inspector entirely.
+func TestStaleWorkerFieldsClearedOnRestart(t *testing.T) {
+	m := NewManager()
+	w := &worker.Worker{Name: "restarty", Status: worker.StatusStarting}
+	bannerCfg := &config.Process{
+		Command: "sh",
+		Args: []string{"-c",
+			`printf '  \xe2\x9e\x9c  Local:   http://localhost:8124/\n  \xe2\x9e\x9c  Debug:   http://localhost:8124/__debug\n'; sleep 30`},
+		Type: config.ProcessTypeWorker,
+	}
+	p, err := m.StartProcess(context.Background(), "restarty", bannerCfg, w)
+	if err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+
+	// Poll the mutex-guarded LogBuffer rather than busy-reading w's
+	// unsynchronized fields directly — see TestBannerParsingPopulatesWorkerURLs
+	// for why that establishes a real happens-before edge for w's fields too.
+	deadline := time.Now().Add(5 * time.Second)
+	var sawDebugLine bool
+	for time.Now().Before(deadline) {
+		if strings.Contains(strings.Join(p.LogBuffer.GetLines(), "\n"), "Debug:") {
+			sawDebugLine = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !sawDebugLine {
+		t.Fatalf("banner lines never logged: lines=%v", p.LogBuffer.GetLines())
+	}
+	if w.DebugURL == "" || w.DevServerURL == "" || w.Port != 8124 {
+		t.Fatalf("banner not parsed before restart: Port=%d DevServerURL=%q DebugURL=%q", w.Port, w.DevServerURL, w.DebugURL)
+	}
+
+	if err := m.StopProcess("restarty"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	waitForExit(t, p, 5*time.Second)
+
+	// Start a new process for the same worker that prints no banner at all.
+	// The fields are cleared synchronously inside StartProcess, before
+	// cmd.Start() launches the new command, so a read right here — in the
+	// same goroutine, immediately after StartProcess returns — is
+	// deterministic: nothing will repopulate them since this run never
+	// prints a banner line.
+	quietCfg := &config.Process{Command: "sleep", Args: []string{"30"}, Type: config.ProcessTypeWorker}
+	if _, err := m.StartProcess(context.Background(), "restarty", quietCfg, w); err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	defer m.StopAll()
+
+	if w.DevServerURL != "" || w.DebugURL != "" || w.Port != 0 {
+		t.Fatalf("stale fields survived restart: Port=%d DevServerURL=%q DebugURL=%q", w.Port, w.DevServerURL, w.DebugURL)
+	}
+}

@@ -26,7 +26,7 @@ type Worker struct {
 	// operations (logs, analytics).
 	SelectedMode string `json:"selected_mode,omitempty"`
 
-	// DevMode is the runtime-selected dev mode (local / remote-bindings / remote).
+	// DevMode is the runtime-selected dev mode (local / remote-bindings).
 	// Empty means remote-bindings (see EffectiveDevMode).
 	DevMode config.DevMode `json:"dev_mode,omitempty"`
 

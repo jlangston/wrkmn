@@ -85,6 +85,11 @@ func TestParseBannerLine(t *testing.T) {
 		{"  ➜  Network: use --host to expose", 0, "", false},
 		{"VITE v8.3.2 ready in 3433 ms", 0, "", false},
 		{"", 0, "", false},
+		// Review Focus 3: arrow-less lines must not match, even though they
+		// contain the "Local:"/"Debug:" substring mid-line — these previously
+		// matched the unanchored regex and could clobber the worker's URLs.
+		{"app log: Local: http://localhost:9999/", 0, "", false},
+		{"app log: Debug: http://localhost:9999/__debug", 0, "", false},
 	}
 	for _, c := range cases {
 		kind, url, ok := ParseBannerLine(c.line)
