@@ -42,6 +42,10 @@ go build -ldflags "-X wrkmn/cmd.Version=1.0.0 -X wrkmn/cmd.Commit=$(git rev-pars
 
 # Show version
 ./wrkmn version
+
+# Drive a running wrkmn from a shell (see "Remote control (agents)")
+./wrkmn ctl status
+./wrkmn ctl start stretch-ui
 ```
 
 ### CLI Flags
@@ -170,6 +174,9 @@ Enter. Bypass with `--skip-preflight`.
 
 ## Keybindings
 
+Every process-control key below has a `wrkmn ctl` equivalent that runs the
+same handler (see [Remote control (agents)](#remote-control-agents)).
+
 ### Main View
 
 | Key | Action |
@@ -224,6 +231,57 @@ Enter. Bypass with `--skip-preflight`.
 | `u` | Undo |
 | `/pattern` | Search forward |
 | `n/N` | Next/previous match |
+
+## Remote control (agents)
+
+A running wrkmn listens on a Unix control socket so scripts and coding
+agents can drive it without a keyboard. `wrkmn ctl` is the client:
+
+```bash
+wrkmn ctl status                      # every row of the process table
+wrkmn ctl start NAME                  # = pressing d on NAME
+wrkmn ctl stop NAME                   # = pressing x on NAME
+wrkmn ctl restart NAME                # = x then d
+wrkmn ctl start-all                   # = pressing a (dependency order, health gating)
+wrkmn ctl stop-all                    # = pressing z
+wrkmn ctl logs NAME [--tail N]        # last N captured log lines (default 200)
+
+# common flags
+wrkmn ctl status --json               # raw {"ok":true,"result":...} response
+wrkmn ctl status --config path/to/worker-compose.yaml   # target another project
+wrkmn ctl status --dir /path/to/project
+wrkmn ctl start-all --timeout 20m     # start-all returns when orchestration finishes
+```
+
+Requests are injected into the TUI as messages and handled by the same code
+the keybindings use, so dev mode (`m`), selected mode (`e`), dependency
+ordering, health gating and env-file resolution behave identically. If a key
+would raise a y/N confirm dialog, `ctl` answers **yes**. `start`, `stop` and
+`restart` reply once the launch/stop has been applied; `start-all` replies
+when the scheduler finishes (its result is the full status snapshot).
+
+**Finding the instance.** The socket path is derived from the project
+directory (the one holding `worker-compose.yaml`), so run `ctl` from that
+directory or point `--config`/`--dir` at it:
+
+- `$XDG_RUNTIME_DIR/wrkmn/<id>.sock` when `XDG_RUNTIME_DIR` is set, else
+  `/tmp/wrkmn-<uid>/<id>.sock`, where `<id>` is the first 12 hex chars of
+  sha256 over the absolute (symlink-resolved) project directory.
+- `WRKMN_CONTROL_SOCKET=<path>` overrides it on both the TUI and `ctl`.
+
+The socket is created when the TUI starts (a stale file from a crash is
+replaced; a live one is never clobbered) and removed on exit. With no
+reachable instance, `ctl` exits 1 with `no running wrkmn for <dir>; socket
+<path>`; an `ok:false` reply also exits 1.
+
+**Protocol** (for clients other than `ctl`): one newline-terminated JSON
+request per connection, one newline-terminated JSON response.
+`{"cmd":"status"}`, `{"cmd":"start","name":"stretch-ui"}`,
+`{"cmd":"stop","name":...}`, `{"cmd":"restart","name":...}`,
+`{"cmd":"start-all"}`, `{"cmd":"stop-all"}`, `{"cmd":"logs","name":...,"tail":200}`
+→ `{"ok":true,"result":...}` or `{"ok":false,"error":"..."}`. `status` rows
+carry `name`, `status`, `port`, `uptime_seconds`, `path`, `type` and, for
+workers, `dev_mode`, `selected_mode`, `dev_server_url` and `pid` while running.
 
 ## Debugging CF Workers
 

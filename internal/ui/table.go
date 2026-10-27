@@ -162,6 +162,14 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case ControlRequestMsg:
+		// `wrkmn ctl` — handled from any view, routed through the same
+		// handlers as the d/x/a/z keys (see control.go).
+		return m.handleControl(msg)
+
+	case controlDoneMsg:
+		return m.handleControlDone(msg)
+
 	case tea.KeyMsg:
 		m.statusMsg = "" // clear transient status on any keypress
 		// Confirm dialog takes priority
@@ -332,12 +340,20 @@ func (m TableModel) handleRemoteLogsViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd
 	return m, cmd
 }
 
+// startWorker starts the row under the cursor (the `d` key).
 func (m TableModel) startWorker() (TableModel, tea.Cmd) {
-	if m.cursor >= len(m.workers) {
+	return m.startWorkerAt(m.cursor)
+}
+
+// startWorkerAt starts row idx. Both the `d` key and `wrkmn ctl start` end
+// up here, so dev mode, selected mode and env-file resolution behave the
+// same whichever way the start was requested.
+func (m TableModel) startWorkerAt(idx int) (TableModel, tea.Cmd) {
+	if idx < 0 || idx >= len(m.workers) {
 		return m, nil
 	}
 
-	w := m.workers[m.cursor]
+	w := m.workers[idx]
 	workerName := w.Name
 
 	// Set status to starting
@@ -374,12 +390,18 @@ func (m TableModel) startWorker() (TableModel, tea.Cmd) {
 	}
 }
 
+// stopWorker stops the row under the cursor (the `x` key).
 func (m TableModel) stopWorker() (TableModel, tea.Cmd) {
-	if m.cursor >= len(m.workers) {
+	return m.stopWorkerAt(m.cursor)
+}
+
+// stopWorkerAt stops row idx; shared by the `x` key and `wrkmn ctl stop`.
+func (m TableModel) stopWorkerAt(idx int) (TableModel, tea.Cmd) {
+	if idx < 0 || idx >= len(m.workers) {
 		return m, nil
 	}
 
-	w := m.workers[m.cursor]
+	w := m.workers[idx]
 	workerName := w.Name
 	isConfig := false
 	if _, ok := w.Scripts["_config"]; ok {

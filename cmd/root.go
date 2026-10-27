@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"wrkmn/internal/cfproject"
 	"wrkmn/internal/config"
+	"wrkmn/internal/control"
 	"wrkmn/internal/preflight"
 	"wrkmn/internal/state"
 	"wrkmn/internal/theme"
@@ -203,6 +206,11 @@ func runApp(cmd *cobra.Command, args []string) {
 	m := ui.NewModelWithConfig(workers, cfg)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
+	// Control socket: `wrkmn ctl` sends requests here; each one is forwarded
+	// into the program as a ControlRequestMsg and answered by the model.
+	ctl := startControlServer(cfg.BaseDir, p)
+	defer ctl.Close()
+
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -217,12 +225,70 @@ func runApp(cmd *cobra.Command, args []string) {
 	}()
 
 	if _, err := p.Run(); err != nil {
+		ctl.Close()
 		fmt.Fprintf(os.Stderr, "Error running program: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Ensure all processes are stopped after tea program exits
 	m.GetManager().StopAll()
+}
+
+// controlReplyTimeout bounds how long a forwarded request may wait on the
+// model. start-all legitimately blocks for the whole orchestration (health
+// gating), so this is generous; the ctl client applies its own --timeout.
+const controlReplyTimeout = 15 * time.Minute
+
+// controlServer is the running control socket, or a no-op when it could not
+// be started (the TUI still works keyboard-only).
+type controlServer struct {
+	srv  *control.Server
+	done chan struct{}
+	once sync.Once
+}
+
+func (c *controlServer) Close() {
+	if c == nil {
+		return
+	}
+	c.once.Do(func() {
+		close(c.done)
+		if c.srv != nil {
+			c.srv.Close()
+		}
+	})
+}
+
+func startControlServer(baseDir string, p *tea.Program) *controlServer {
+	c := &controlServer{done: make(chan struct{})}
+	sockPath, err := control.DefaultSocketPath(baseDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: control socket disabled: %v\n", err)
+		return c
+	}
+	srv := control.NewServer(sockPath, func(req control.Request) control.Response {
+		reply := make(chan control.Response, 1)
+		select {
+		case <-c.done:
+			return control.Errorf("wrkmn is shutting down")
+		default:
+		}
+		p.Send(ui.ControlRequestMsg{Request: req, Reply: reply})
+		select {
+		case resp := <-reply:
+			return resp
+		case <-c.done:
+			return control.Errorf("wrkmn exited before answering %s", req.Cmd)
+		case <-time.After(controlReplyTimeout):
+			return control.Errorf("timed out after %s waiting for the TUI to answer %s", controlReplyTimeout, req.Cmd)
+		}
+	})
+	if err := srv.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: control socket disabled: %v\n", err)
+		return c
+	}
+	c.srv = srv
+	return c
 }
 
 // versionCmd shows version information

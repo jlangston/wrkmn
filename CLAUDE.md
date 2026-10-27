@@ -29,6 +29,11 @@ go build -ldflags "-X wrkmn/cmd.Version=1.0.0 -X wrkmn/cmd.Commit=$(git rev-pars
 
 # Show version
 ./wrkmn version
+
+# Remote-control a running instance (same handlers as the d/x/a/z keys)
+./wrkmn ctl status [--json]
+./wrkmn ctl start NAME | stop NAME | restart NAME | start-all | stop-all
+./wrkmn ctl logs NAME --tail 200
 ```
 
 ## CLI Flags
@@ -105,7 +110,8 @@ defaults:
 ```
 ├── main.go                      # Entry point, calls cmd.Execute()
 ├── cmd/
-│   ├── root.go                  # Cobra CLI commands and flags
+│   ├── root.go                  # Cobra CLI commands and flags; starts the control socket server
+│   ├── ctl.go                   # `ctl` subcommand: client for the control socket
 │   └── validate.go              # `validate` subcommand (config + pre-flight check, no start)
 ├── internal/
 │   ├── config/                  # YAML configuration
@@ -158,11 +164,18 @@ defaults:
 │   ├── state/                   # Persisted runtime selections
 │   │   └── state.go             # Save/load/apply dev-mode + mode selections (.wrkmn-state.json)
 │   │
+│   ├── control/                 # Remote control (wrkmn ctl)
+│   │   ├── path.go              # Socket path derivation (shared by TUI + ctl)
+│   │   ├── protocol.go          # JSON request/response + result types
+│   │   ├── server.go            # Unix-socket server, one request per connection
+│   │   └── client.go            # Call(): dial, send, wait for the reply
+│   │
 │   └── ui/                      # TUI components
 │       ├── model.go             # Main Bubble Tea model
 │       ├── views.go             # ViewMode enum, view switching
 │       ├── styles.go            # Theme-aware style helpers
 │       ├── table.go             # Process table view
+│       ├── control.go           # ControlRequestMsg → same handlers as d/x/a/z; status/logs snapshots
 │       ├── logs.go              # Log viewer with viewport
 │       ├── help.go              # Help overlay
 │       ├── toast.go             # Notification toasts
@@ -261,11 +274,13 @@ knowing:
 
 **Main View:**
 - `j/k` - Navigate up/down
-- `Enter` - Start/stop selected process
-- `l` - View logs
-- `d` - Enter debug mode (workers only)
-- `a` - Start all
-- `x` - Stop all
+- `Enter` / `l` - View logs
+- `d` - Start (dev) — `wrkmn ctl start NAME`
+- `D` - Enter debug mode (workers only)
+- `x` - Stop process — `wrkmn ctl stop NAME`
+- `a` - Start all — `wrkmn ctl start-all`
+- `z` - Stop all — `wrkmn ctl stop-all`
+- `m` / `e` - Select dev mode / mode
 - `q` - Quit
 
 **Debug View:**
@@ -286,6 +301,33 @@ knowing:
 - `y{motion}` - Yank
 - `p/P` - Paste
 - `u` - Undo
+
+### Remote control (agents)
+
+`cmd/root.go` starts a Unix-socket server (`internal/control.Server`) next to
+`tea.NewProgram`. Each connection carries one newline-terminated JSON request;
+the server forwards it with `p.Send(ui.ControlRequestMsg{Request, Reply})` and
+blocks on `Reply` (buffered, 15-minute cap). `TableModel.Update` handles the
+message from any view by calling the *same* handler the key would —
+`startWorkerAt`/`stopWorkerAt` (d/x, selecting the row by name instead of
+cursor), `startAllWorkers` (a), `stopAllWorkers` (z) — then wraps the
+handler's `tea.Cmd` in a `controlDoneMsg` so the reply is built only after the
+completion message (`processStartedMsg` etc.) has been applied. `restart`
+chains stop → start through `controlDoneMsg.next`. Any y/N confirm a handler
+raises is auto-answered yes (`autoConfirm`). `status` and `logs` are read-only
+snapshots taken inside Update.
+
+Socket path (`control.SocketPath`, unit-tested, used by both sides):
+`$XDG_RUNTIME_DIR/wrkmn/<id>.sock`, else `/tmp/wrkmn-<uid>/<id>.sock`, with
+`<id>` = first 12 hex of sha256 over the normalized absolute base directory;
+`WRKMN_CONTROL_SOCKET` overrides. Stale files are removed on start, live ones
+refused, and the file is removed on exit. The ctl client derives the directory
+from `--config` (its dir), `--dir`, or cwd — matching `runApp`.
+
+```bash
+wrkmn ctl status --json
+wrkmn ctl start stretch-ui && wrkmn ctl logs stretch-ui --tail 50
+```
 
 ### Dependencies
 
