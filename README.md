@@ -15,6 +15,25 @@ A powerful TUI for managing Cloudflare Workers and related processes. Think of i
 
 ## Installation
 
+Prebuilt binaries for Linux and macOS (amd64 and arm64) are attached to each
+[release](https://github.com/jlangston/wrkmn/releases). Download the archive
+for your platform, then:
+
+```bash
+tar -xzf wrkmn_*.tar.gz
+install wrkmn_*/wrkmn ~/.local/bin/   # or anywhere on PATH
+```
+
+Windows is not supported (process management relies on POSIX process groups).
+
+Releases are built by GitHub Actions when a `v*` tag is pushed:
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+Or build from source:
+
 ```bash
 go build -o wrkmn .
 ```
