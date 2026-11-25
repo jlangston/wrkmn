@@ -226,6 +226,15 @@ Health checks gate startup ordering only — the scheduler tears down its
 health monitors once start-all orchestration completes. wrkmn does not run
 continuous background health monitoring after startup.
 
+**Manual processes (`autostart: false`):** never started implicitly —
+start-all skips them (scheduler emits `EventSkipped`; a stopped manual
+dependency fails its dependents fast with a status-line warning), dependency
+resolution never launches them, and the restart policy never resurrects them.
+Explicit start only (`space`/`d`, `ctl start`). Stopped manual rows render
+`manual` in STATUS; `ctl status` rows carry `manual: true`. Every managed
+process also gets `Pdeathsig: SIGTERM`, so children die with wrkmn even when
+it is SIGKILLed and no cleanup runs.
+
 **Restart Policy:**
 - `defaults.restart` (`enabled`, `max_tries`, `delay`) is inherited by
   `worker`/`service` processes that don't set their own `restart:`.
@@ -275,6 +284,7 @@ knowing:
 **Main View:**
 - `j/k` - Navigate up/down
 - `Enter` / `l` - View logs
+- `space` - Toggle start/stop of the row
 - `d` - Start (dev) — `wrkmn ctl start NAME`
 - `D` - Enter debug mode (workers only)
 - `x` - Stop process — `wrkmn ctl stop NAME`
@@ -326,7 +336,7 @@ from `--config` (its dir), `--dir`, or cwd — matching `runApp`.
 
 ```bash
 wrkmn ctl status --json
-wrkmn ctl start stretch-ui && wrkmn ctl logs stretch-ui --tail 50
+wrkmn ctl start my-worker && wrkmn ctl logs my-worker --tail 50
 ```
 
 ### Dependencies

@@ -64,7 +64,7 @@ go build -ldflags "-X wrkmn/cmd.Version=1.0.0 -X wrkmn/cmd.Commit=$(git rev-pars
 
 # Drive a running wrkmn from a shell (see "Remote control (agents)")
 ./wrkmn ctl status
-./wrkmn ctl start stretch-ui
+./wrkmn ctl start my-worker
 ```
 
 ### CLI Flags
@@ -191,6 +191,36 @@ errors.
 The TUI runs the same checks at startup: errors block, warnings pause for
 Enter. Bypass with `--skip-preflight`.
 
+## Manual processes (`autostart: false`)
+
+A process with `autostart: false` never starts implicitly: start-all (`a`,
+`wrkmn ctl start-all`) skips it, dependency resolution never launches it, and
+the restart policy never resurrects it after a crash. It starts only on an
+explicit action — `space`/`d` on its row, or `wrkmn ctl start NAME`. Stopped
+manual rows show `manual` in the STATUS column so they read as deliberately
+off, and `ctl status --json` carries a `manual` flag.
+
+Use it for rows whose side effects demand a human decision — e.g. a
+`tailscale funnel` service that exposes a local port publicly:
+
+```yaml
+processes:
+  funnel-ui:
+    command: tailscale
+    args: [funnel, "8789"]
+    type: service
+    autostart: false
+```
+
+A start-all dependent of a *running* manual process proceeds normally; if the
+manual process is stopped, the dependent is skipped with a warning in the
+status line instead of blocking.
+
+wrkmn also sets `Pdeathsig` on every managed process: if wrkmn itself dies —
+even by SIGKILL, where no cleanup code runs — the kernel SIGTERMs its
+children, so a funnel (or any other side-effect-bearing row) cannot outlive
+the TUI.
+
 ## Keybindings
 
 Every process-control key below has a `wrkmn ctl` equivalent that runs the
@@ -202,6 +232,7 @@ same handler (see [Remote control (agents)](#remote-control-agents)).
 |-----|--------|
 | `j/k` | Navigate up/down |
 | `Enter` / `l` | View logs |
+| `space` | Toggle start/stop |
 | `d` | Start (dev) |
 | `D` | Enter debug mode (running CF Workers only) |
 | `m` | Select dev mode (local / remote-bindings) |
@@ -295,7 +326,7 @@ reachable instance, `ctl` exits 1 with `no running wrkmn for <dir>; socket
 
 **Protocol** (for clients other than `ctl`): one newline-terminated JSON
 request per connection, one newline-terminated JSON response.
-`{"cmd":"status"}`, `{"cmd":"start","name":"stretch-ui"}`,
+`{"cmd":"status"}`, `{"cmd":"start","name":"my-worker"}`,
 `{"cmd":"stop","name":...}`, `{"cmd":"restart","name":...}`,
 `{"cmd":"start-all"}`, `{"cmd":"stop-all"}`, `{"cmd":"logs","name":...,"tail":200}`
 → `{"ok":true,"result":...}` or `{"ok":false,"error":"..."}`. `status` rows
