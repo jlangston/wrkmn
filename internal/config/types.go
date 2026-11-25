@@ -48,6 +48,14 @@ type Process struct {
 	Restart       *RestartPolicy    `yaml:"restart,omitempty"`
 	LogPrefix     string            `yaml:"log_prefix,omitempty"`
 	Type          ProcessType       `yaml:"type,omitempty"`
+	// Autostart controls whether start-all launches this process (default
+	// true). With `autostart: false` the process starts ONLY by explicit
+	// request (TUI d/space on the row, `wrkmn ctl start NAME`): start-all
+	// skips it, dependency resolution never launches it, and the restart
+	// policy never resurrects it. Meant for rows whose side effects demand a
+	// deliberate human action — e.g. a tailscale funnel that exposes a local
+	// port publicly.
+	Autostart *bool `yaml:"autostart,omitempty"`
 
 	// Modes a worker's cloudflare.config.ts function accepts (cf dev --mode).
 	// Defaults to [development, production] for worker-type processes.
@@ -58,6 +66,12 @@ type Process struct {
 
 	// Internal tracking (not from YAML)
 	Source ProcessSource `yaml:"-"`
+}
+
+// AutostartEnabled reports whether start-all may launch this process.
+// Unset means true; only an explicit `autostart: false` opts a process out.
+func (p *Process) AutostartEnabled() bool {
+	return p.Autostart == nil || *p.Autostart
 }
 
 // ProcessType distinguishes between CF workers and other processes

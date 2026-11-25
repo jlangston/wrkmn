@@ -139,7 +139,9 @@ func (m TableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case allProcessesStartedMsg:
-		// All processes started, nothing else to do
+		if msg.warn != "" {
+			m.statusMsg = msg.warn
+		}
 		return m, nil
 
 	case allProcessesStoppedMsg:
@@ -266,6 +268,9 @@ func (m TableModel) handleTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor--
 		}
 
+	case key.Matches(msg, key.NewBinding(key.WithKeys(" "))):
+		return m.toggleWorker()
+
 	case key.Matches(msg, key.NewBinding(key.WithKeys("d"))):
 		return m.startWorker()
 
@@ -390,6 +395,21 @@ func (m TableModel) startWorkerAt(idx int) (TableModel, tea.Cmd) {
 	}
 }
 
+// toggleWorker flips the row under the cursor: stopped starts, running (or
+// starting) stops. One keypress on a manual row — e.g. a tailscale funnel —
+// opens or closes it.
+func (m TableModel) toggleWorker() (TableModel, tea.Cmd) {
+	if m.cursor < 0 || m.cursor >= len(m.workers) {
+		return m, nil
+	}
+	switch m.workers[m.cursor].Status {
+	case worker.StatusRunning, worker.StatusStarting:
+		return m.stopWorker()
+	default:
+		return m.startWorker()
+	}
+}
+
 // stopWorker stops the row under the cursor (the `x` key).
 func (m TableModel) stopWorker() (TableModel, tea.Cmd) {
 	return m.stopWorkerAt(m.cursor)
@@ -437,7 +457,10 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 		if _, isConfig := w.Scripts["_config"]; isConfig && m.config != nil {
 			if proc, exists := m.config.Processes[w.Name]; exists {
 				configProcs[w.Name] = proc
-				if w.Status != worker.StatusRunning {
+				// Manual rows join the graph (a running one satisfies its
+				// dependents) but are never started by start-all, so don't
+				// show them as starting.
+				if w.Status != worker.StatusRunning && proc.AutostartEnabled() {
 					w.Status = worker.StatusStarting
 				}
 				continue
@@ -503,6 +526,9 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 				w.Status = worker.StatusRunning
 			case process.EventCompleted:
 				w.Status = worker.StatusStopped // oneshot finished successfully
+			case process.EventSkipped:
+				// Manual (autostart: false) row skipped by start-all — its
+				// status was never touched; leave it reading "manual".
 			case process.EventFailed:
 				w.Status = worker.StatusFailed
 				// This goroutine runs concurrently with Update (TableModel is
@@ -541,6 +567,7 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 		for _, ds := range discovered {
 			manager.StartWorker(ds.w)
 		}
+		var warn string
 		if len(configProcs) > 0 {
 			// Health monitors (and other startup-scoped waits) are gated on this
 			// ctx — they exist only to hold up dependents during start-all.
@@ -549,11 +576,13 @@ func (m TableModel) startAllWorkers() (TableModel, tea.Cmd) {
 			// goroutines instead of leaking one health monitor per health-checked
 			// process on every start-all cycle. It also doubles as the
 			// cancellation signal for an interrupted start-all (z / quit).
-			sched.StartAll(ctx)
+			if err := sched.StartAll(ctx); err != nil {
+				warn = fmt.Sprintf("start-all: %v", err)
+			}
 		}
 		sched.CloseEvents()
 		<-eventsDone
-		return allProcessesStartedMsg{}
+		return allProcessesStartedMsg{warn: warn}
 	}
 }
 
@@ -767,7 +796,7 @@ func (m TableModel) renderTable() string {
 	helpText := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		Padding(0, 1).
-		Render("j/k: navigate • d: dev • D: debug • m: mode • s: scripts • r: remote logs • e: env • x: stop • a: all • l: logs • q: quit")
+		Render("j/k: navigate • space: toggle • d: dev • D: debug • m: mode • s: scripts • r: remote logs • e: env • x: stop • a: all • l: logs • q: quit")
 
 	// Add main container with border
 	rows := []string{table, "", helpText}
@@ -874,7 +903,11 @@ func (m TableModel) renderDataRow(w *worker.Worker, index int, nameWidth, status
 	name := cellStyle.Width(nameWidth).Align(lipgloss.Left).Render(" " + nameText)
 
 	statusText := string(w.Status)
-	if statusStyle, ok := statusStyles[w.Status]; ok {
+	if w.Manual && w.Status == worker.StatusStopped {
+		// Deliberately off, not broken: manual rows (autostart: false) only
+		// start on an explicit action.
+		statusText = statusStyles[worker.StatusStopped].Render("manual")
+	} else if statusStyle, ok := statusStyles[w.Status]; ok {
 		statusText = statusStyle.Render(statusText)
 	}
 	// Truncate status text if needed
@@ -939,8 +972,12 @@ type processStoppedMsg struct {
 	err        error
 }
 
-// allProcessesStartedMsg is sent when all processes have been started
-type allProcessesStartedMsg struct{}
+// allProcessesStartedMsg is sent when all processes have been started.
+// warn carries a start-all problem worth surfacing (e.g. a dependent skipped
+// because its dependency is a manual process that isn't running).
+type allProcessesStartedMsg struct {
+	warn string
+}
 
 // allProcessesStoppedMsg is sent when all processes have been stopped
 type allProcessesStoppedMsg struct{}

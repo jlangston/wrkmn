@@ -273,6 +273,12 @@ func (m *Manager) maybeRestart(p *Process) {
 	if cfg.Type != config.ProcessTypeWorker && cfg.Type != config.ProcessTypeService {
 		return
 	}
+	// Manual processes (autostart: false) are never resurrected: their side
+	// effects (e.g. a public tailscale funnel) must only ever appear through
+	// an explicit human start.
+	if !cfg.AutostartEnabled() {
+		return
+	}
 
 	m.mu.Lock()
 	if time.Since(p.Started) >= restartHealthyAfter {
@@ -351,10 +357,15 @@ func (m *Manager) StartWorker(w *worker.Worker) error {
 	runArgs := append([]string{"dev"}, buildCfDevArgs(w.DevMode, w.SelectedMode)...)
 	cmd := exec.CommandContext(ctx, "cf", runArgs...)
 	cmd.Dir = w.Path
-	// Set process group to handle signals properly
+	// Set process group to handle signals properly. Pdeathsig makes the
+	// kernel SIGTERM the child if wrkmn dies by ANY means (SIGKILL, panic) —
+	// graceful quit paths already run StopAll, but without this an
+	// ungraceful death orphans children, and some of them (e.g. a tailscale
+	// funnel) hold side effects that must not outlive the TUI.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-		Pgid:    0,
+		Setpgid:   true,
+		Pgid:      0,
+		Pdeathsig: syscall.SIGTERM,
 	}
 
 	logBuffer := NewCircularBuffer(1000)
@@ -585,10 +596,15 @@ func (m *Manager) StartProcess(ctx context.Context, name string, cfg *config.Pro
 	}
 	// If no custom env vars, cmd.Env stays nil which inherits parent env
 
-	// Set process group to handle signals properly
+	// Set process group to handle signals properly. Pdeathsig makes the
+	// kernel SIGTERM the child if wrkmn dies by ANY means (SIGKILL, panic) —
+	// graceful quit paths already run StopAll, but without this an
+	// ungraceful death orphans children, and some of them (e.g. a tailscale
+	// funnel) hold side effects that must not outlive the TUI.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-		Pgid:    0,
+		Setpgid:   true,
+		Pgid:      0,
+		Pdeathsig: syscall.SIGTERM,
 	}
 
 	logBuffer := NewCircularBuffer(1000)

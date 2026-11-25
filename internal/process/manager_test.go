@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -518,5 +519,42 @@ func TestStaleWorkerFieldsClearedOnRestart(t *testing.T) {
 
 	if w.DevServerURL != "" || w.DebugURL != "" || w.Port != 0 {
 		t.Fatalf("stale fields survived restart: Port=%d DevServerURL=%q DebugURL=%q", w.Port, w.DevServerURL, w.DebugURL)
+	}
+}
+
+func TestManualProcessNeverAutoRestarts(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "runs")
+	off := false
+	cfg := &config.Process{
+		Command:   "sh",
+		Args:      []string{"-c", "echo run >> " + marker + "; exit 1"},
+		Type:      config.ProcessTypeService,
+		Autostart: &off,
+		Restart:   &config.RestartPolicy{Enabled: true, MaxTries: 3, Delay: config.Duration{Duration: 20 * time.Millisecond}},
+	}
+	m := NewManager()
+	p, err := m.StartProcess(context.Background(), "manual-flappy", cfg, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.StopAll()
+	waitForExit(t, p, 5*time.Second)
+	time.Sleep(300 * time.Millisecond) // give a wrong restart a chance to fire
+	if got := countLines(t, marker); got != 1 {
+		t.Fatalf("runs = %d, want exactly 1 (manual processes are never resurrected)", got)
+	}
+}
+
+func TestPdeathsigConfigured(t *testing.T) {
+	m := NewManager()
+	cfg := &config.Process{Command: "sleep", Args: []string{"30"}, Type: config.ProcessTypeService}
+	p, err := m.StartProcess(context.Background(), "pdeath-check", cfg, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.StopAll()
+	if p.Cmd.SysProcAttr == nil || p.Cmd.SysProcAttr.Pdeathsig != syscall.SIGTERM {
+		t.Fatalf("Pdeathsig not configured: %+v", p.Cmd.SysProcAttr)
 	}
 }

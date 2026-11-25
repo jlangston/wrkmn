@@ -56,6 +56,7 @@ func defaultHelpSections() []HelpSection {
 			Bindings: []HelpBinding{
 				{"d", "Start (dev)"},
 				{"x", "Stop process"},
+				{"space", "Toggle start/stop"},
 				{"a", "Start all"},
 				{"z", "Stop all"},
 				{"r", "Restart process"},

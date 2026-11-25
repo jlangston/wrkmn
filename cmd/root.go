@@ -156,6 +156,7 @@ func runApp(cmd *cobra.Command, args []string) {
 			Path:        proc.WorkingDir,
 			Status:      worker.StatusStopped,
 			IsCfProject: isCf,
+			Manual:      !proc.AutostartEnabled(),
 			DevMode:     proc.DevMode,
 			Modes:       proc.Modes,
 			AccountID:   proc.AccountID,

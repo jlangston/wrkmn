@@ -49,6 +49,9 @@ type StatusRow struct {
 	UptimeSeconds int64  `json:"uptime_seconds"`
 	Path          string `json:"path"`
 	Type          string `json:"type"`
+	// Manual mirrors `autostart: false`: the row only starts on explicit
+	// request; a stopped manual row is deliberately off, not broken.
+	Manual bool `json:"manual,omitempty"`
 	// Worker-only fields (type == "worker").
 	DevMode      string `json:"dev_mode,omitempty"`
 	SelectedMode string `json:"selected_mode,omitempty"`

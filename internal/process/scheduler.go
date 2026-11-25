@@ -28,6 +28,7 @@ const (
 	EventFailed
 	EventWaiting
 	EventCompleted
+	EventSkipped
 )
 
 func (t StartEventType) String() string {
@@ -44,6 +45,8 @@ func (t StartEventType) String() string {
 		return "waiting"
 	case EventCompleted:
 		return "completed"
+	case EventSkipped:
+		return "skipped"
 	default:
 		return "unknown"
 	}
@@ -179,6 +182,22 @@ func (s *Scheduler) startProcess(ctx context.Context, name string) error {
 	// Already running or completed (e.g. started individually from the UI
 	// before "start all") — nothing to do.
 	if node.State == StateRunning || node.State == StateCompleted {
+		return nil
+	}
+
+	// Manual processes (autostart: false) are never started by start-all —
+	// only an explicit start may launch them (their side effects, e.g. a
+	// public tailscale funnel, demand a deliberate action). A running manual
+	// node was pre-marked StateRunning above and satisfies dependents
+	// normally; a stopped one is marked StateStopped so dependents fail fast
+	// ("dependency stopped") instead of polling to the timeout.
+	if node.Config != nil && !node.Config.AutostartEnabled() {
+		s.graph.UpdateState(name, StateStopped)
+		s.sendEvent(StartEvent{
+			Name:    name,
+			Type:    EventSkipped,
+			Message: "manual (autostart: false) — start it explicitly",
+		})
 		return nil
 	}
 

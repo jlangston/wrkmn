@@ -610,3 +610,96 @@ func TestOneshotFailureFailsDependent(t *testing.T) {
 		t.Fatal("app should not have started after its dependency failed")
 	}
 }
+
+func TestStartAllSkipsManualAndFailsDependentFast(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "manual-ran")
+	off := false
+	processes := map[string]config.Process{
+		"funnel": {
+			Command:   "sh",
+			Args:      []string{"-c", "echo ran >> " + marker + "; sleep 30"},
+			Type:      config.ProcessTypeService,
+			Autostart: &off,
+		},
+		"dependent": {
+			Command: "sleep",
+			Args:    []string{"30"},
+			Type:    config.ProcessTypeService,
+			DependsOn: []config.Dependency{
+				{Process: "funnel", Condition: config.ConditionStarted},
+			},
+		},
+	}
+	graph := NewDependencyGraph(processes)
+	m := NewManager()
+	defer m.StopAll()
+	sched := NewScheduler(graph, func(ctx context.Context, name string, proc *config.Process) (*Process, error) {
+		return m.StartProcess(ctx, name, proc, nil)
+	})
+
+	start := time.Now()
+	err := sched.StartAll(context.Background())
+	if err == nil {
+		t.Fatal("StartAll should report the dependent's failure")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("dependent did not fail fast (%s)", time.Since(start))
+	}
+	if !strings.Contains(err.Error(), "stopped") {
+		t.Fatalf("error should mention the stopped manual dependency: %v", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("manual process was started by start-all")
+	}
+	if st := graph.GetNode("funnel").State; st != StateStopped {
+		t.Fatalf("manual node state = %v, want StateStopped", st)
+	}
+	if _, exists := m.GetProcess("dependent"); exists {
+		t.Fatal("dependent should not have started")
+	}
+}
+
+func TestStartAllRunningManualSatisfiesDependent(t *testing.T) {
+	off := false
+	processes := map[string]config.Process{
+		"funnel": {
+			Command:   "sleep",
+			Args:      []string{"30"},
+			Type:      config.ProcessTypeService,
+			Autostart: &off,
+		},
+		"dependent": {
+			Command: "sleep",
+			Args:    []string{"30"},
+			Type:    config.ProcessTypeService,
+			DependsOn: []config.Dependency{
+				{Process: "funnel", Condition: config.ConditionStarted},
+			},
+		},
+	}
+	graph := NewDependencyGraph(processes)
+	m := NewManager()
+	defer m.StopAll()
+
+	// The user already started the manual row explicitly; the table pre-marks
+	// it exactly like this before invoking the scheduler.
+	funnelCfg := processes["funnel"]
+	p, err := m.StartProcess(context.Background(), "funnel", &funnelCfg, nil)
+	if err != nil {
+		t.Fatalf("explicit start: %v", err)
+	}
+	graph.UpdateState("funnel", StateRunning)
+	graph.UpdateHealth("funnel", HealthHealthy)
+	graph.SetProcess("funnel", p)
+
+	sched := NewScheduler(graph, func(ctx context.Context, name string, proc *config.Process) (*Process, error) {
+		return m.StartProcess(ctx, name, proc, nil)
+	})
+	if err := sched.StartAll(context.Background()); err != nil {
+		t.Fatalf("StartAll: %v", err)
+	}
+	if _, exists := m.GetProcess("dependent"); !exists {
+		t.Fatal("dependent should have started behind the running manual dependency")
+	}
+}

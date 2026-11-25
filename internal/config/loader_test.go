@@ -774,3 +774,50 @@ processes:
 		t.Fatalf("Type = %q, want service (inference removed)", cfg.Processes["api"].Type)
 	}
 }
+
+func TestAutostartDefaultsTrue(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  api:
+    command: sh
+    args: [-c, "true"]
+    type: service
+`)
+	cfg, err := NewLoader(path).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	proc := cfg.Processes["api"]
+	if !proc.AutostartEnabled() {
+		t.Fatal("autostart should default to true when unset")
+	}
+}
+
+func TestAutostartFalseParsed(t *testing.T) {
+	path := writeTempConfig(t, `
+version: "1.0"
+processes:
+  funnel:
+    command: tailscale
+    args: [funnel, "8789"]
+    type: service
+    autostart: false
+  api:
+    command: sh
+    type: service
+    autostart: true
+`)
+	cfg, err := NewLoader(path).Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	funnel := cfg.Processes["funnel"]
+	if funnel.AutostartEnabled() {
+		t.Fatal("autostart: false not honored")
+	}
+	api := cfg.Processes["api"]
+	if !api.AutostartEnabled() {
+		t.Fatal("explicit autostart: true not honored")
+	}
+}

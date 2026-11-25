@@ -224,6 +224,7 @@ func (m TableModel) statusResult() control.StatusResult {
 			Port:   w.Port,
 			Path:   w.Path,
 			Type:   m.processType(w),
+			Manual: w.Manual,
 		}
 		if p, exists := m.manager.GetProcess(w.Name); exists {
 			row.UptimeSeconds = int64(time.Since(p.Started).Seconds())

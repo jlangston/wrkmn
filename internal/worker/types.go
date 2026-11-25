@@ -18,6 +18,12 @@ type Worker struct {
 	// IsCfProject marks a directory with a cloudflare.config.* file.
 	IsCfProject bool `json:"is_cf_project,omitempty"`
 
+	// Manual marks a process configured with `autostart: false`: start-all,
+	// dependency resolution, and the restart policy never launch it — only an
+	// explicit start does. Zero value (false) means normal autostart, so
+	// discovered workers need no special handling.
+	Manual bool `json:"manual,omitempty"`
+
 	// Modes a worker's cloudflare.config.ts function accepts (cf dev --mode),
 	// e.g. "development", "production".
 	Modes []string `json:"modes,omitempty"`
